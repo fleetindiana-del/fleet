@@ -12,6 +12,7 @@ export interface IEnrollmentCode extends Document {
   employeeId?: string;
   employeeName?: string;
   role: 'driver' | 'employee';
+  departmentId?: mongoose.Types.ObjectId;
   capabilities: IEnrollmentCapabilities;
   vehicle?: { id?: string; registration?: string };
   serverUrl?: string;
@@ -20,6 +21,10 @@ export interface IEnrollmentCode extends Document {
   expiresAt?: Date;
   revoked: boolean;
   driverId?: mongoose.Types.ObjectId;
+  // Set at creation to record whether the handset was already set up when the
+  // code was issued. `usedAt` (the device actually redeeming the code) always
+  // wins over this when the two disagree — see getCodeStatus in the UI.
+  deviceSetupStatus: 'pending' | 'installed';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +36,7 @@ const EnrollmentCodeSchema = new Schema(
     employeeId: { type: String },
     employeeName: { type: String },
     role: { type: String, enum: ['driver', 'employee'], default: 'driver' },
+    departmentId: { type: Schema.Types.ObjectId, ref: 'Department' },
     capabilities: {
       callMonitoring: { type: Boolean, default: true },
       locationTracking: { type: Boolean, default: false },
@@ -46,6 +52,7 @@ const EnrollmentCodeSchema = new Schema(
     expiresAt: { type: Date },
     revoked: { type: Boolean, default: false },
     driverId: { type: Schema.Types.ObjectId, ref: 'Driver' },
+    deviceSetupStatus: { type: String, enum: ['pending', 'installed'], default: 'pending' },
   },
   { timestamps: true, collection: 'enrollmentcodes' }
 );

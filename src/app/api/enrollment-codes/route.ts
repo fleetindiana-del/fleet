@@ -5,6 +5,7 @@ import connectToDatabase from "@/lib/db";
 import EnrollmentCode from "@/models/EnrollmentCode";
 import User from "@/models/User";
 import Driver from "@/models/Driver";
+import Department from "@/models/Department";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import crypto from "crypto";
@@ -85,7 +86,10 @@ export async function GET() {
       query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
     }
 
-    const codes = await EnrollmentCode.find(query).sort({ createdAt: -1 }).limit(200);
+    const codes = await EnrollmentCode.find(query)
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .populate("departmentId", "name");
     return NextResponse.json(codes);
   } catch (error) {
     console.error("GET /api/enrollment-codes error:", error);
@@ -108,12 +112,14 @@ export async function POST(req: Request) {
       employeeId,
       employeeName,
       role = "driver",
+      departmentId,
       capabilities,
       vehicle,
       expiresInHours,
       username,
       password,
       email,
+      deviceSetupStatus,
     } = body;
 
     if (!employeeName?.trim()) {
@@ -142,6 +148,16 @@ export async function POST(req: Request) {
     const companyId = new mongoose.Types.ObjectId(session.user.companyId!);
     const caps = normalizeCapabilities(capabilities);
     const vehicleObj = normalizeVehicle(vehicle);
+    const setupStatus = deviceSetupStatus === "installed" ? "installed" : "pending";
+
+    let departmentObjId: mongoose.Types.ObjectId | undefined;
+    if (typeof departmentId === "string" && departmentId.trim()) {
+      const department = await Department.findOne({ _id: departmentId, companyId });
+      if (!department) {
+        return NextResponse.json({ error: "Department not found" }, { status: 400 });
+      }
+      departmentObjId = department._id;
+    }
 
     // Create the account before minting a code, so a clashing username fails
     // without leaving an orphan code behind.
@@ -172,6 +188,7 @@ export async function POST(req: Request) {
         passwordHash: await bcrypt.hash(loginPassword, 10),
         role: "driver",
         companyId,
+        departmentId: departmentObjId,
         capabilities: caps,
       });
 
@@ -207,6 +224,7 @@ export async function POST(req: Request) {
       employeeId: employeeId?.trim() || code,
       employeeName: employeeName.trim(),
       role: role === "employee" ? "employee" : "driver",
+      departmentId: departmentObjId,
       capabilities: caps,
       vehicle: vehicleObj,
       serverUrl,
@@ -214,9 +232,11 @@ export async function POST(req: Request) {
       expiresAt,
       driverId,
       revoked: false,
+      deviceSetupStatus: setupStatus,
     });
 
     // Shared Mongo is enough — Android redeems against Express which reads the same collection.
+    await enrollmentCode.populate("departmentId", "name");
     return NextResponse.json(enrollmentCode, { status: 201 });
   } catch (error) {
     console.error("POST /api/enrollment-codes error:", error);

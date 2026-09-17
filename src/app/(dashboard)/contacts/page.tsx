@@ -3,27 +3,55 @@ import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import connectToDatabase from "@/lib/db";
 import Contact from "@/models/Contact";
+import MergedContact from "@/models/MergedContact";
+import { runContactMerge } from "@/lib/contactMerge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ContactsTableClient, type ContactBankRow } from "./ContactsTableClient";
+import { ContactsTableClient, type MergedContactRow } from "./ContactsTableClient";
+
+type MergedContactLean = {
+  _id: unknown;
+  contactName: string;
+  phoneNumbers?: string[];
+  sources?: Array<{ employeeName?: string; deviceId?: string; phoneNumber?: string }>;
+  sourceCount?: number;
+  lastSyncedAt?: Date;
+};
 
 async function getContacts() {
   await connectToDatabase();
-  // We can fetch all contacts for the admin view.
-  // Sorting by employee name and then contact name.
-  const contacts = await Contact.find().sort({ employeeName: 1, contactName: 1 }).lean();
-  return contacts.map((c: any) => {
-    const syncedAt =
-      c.syncedAt instanceof Date ? c.syncedAt.toISOString() : c.syncedAt ? String(c.syncedAt) : null;
-    const row: ContactBankRow = {
-      id: String(c._id),
-      employeeName: String(c.employeeName ?? ""),
-      deviceId: String(c.deviceId ?? ""),
-      contactName: String(c.contactName ?? ""),
-      phoneNumber: String(c.phoneNumber ?? ""),
-      syncedAt,
-    };
-    return row;
-  });
+
+  const rawCount = await Contact.estimatedDocumentCount();
+  let total = await MergedContact.countDocuments();
+
+  // Contacts should appear merged by default: if the merge job has never run
+  // for this data (fresh sync, no admin has clicked "Re-merge now" yet), run
+  // it inline instead of showing an empty Contact Bank until someone notices
+  // and clicks a button. Ongoing freshness after this is handled by
+  // maybeTriggerAutoMerge on every device sync (see src/lib/contactMerge.ts).
+  if (total === 0 && rawCount > 0) {
+    await runContactMerge();
+    total = await MergedContact.countDocuments();
+  }
+
+  const rows = await MergedContact.find()
+    .sort({ contactName: 1 })
+    .select("contactName phoneNumbers sources sourceCount lastSyncedAt")
+    .lean<MergedContactLean[]>();
+
+  const mapped: MergedContactRow[] = rows.map((r) => ({
+    id: String(r._id),
+    contactName: r.contactName,
+    phoneNumbers: r.phoneNumbers ?? [],
+    sources: (r.sources ?? []).map((s) => ({
+      employeeName: s.employeeName || "Unknown",
+      deviceId: s.deviceId || "",
+      phoneNumber: s.phoneNumber || "",
+    })),
+    sourceCount: r.sourceCount ?? r.sources?.length ?? 0,
+    lastSyncedAt: r.lastSyncedAt ? new Date(r.lastSyncedAt).toISOString() : null,
+  }));
+
+  return { rows: mapped, rawCount };
 }
 
 export default async function ContactsPage() {
@@ -33,7 +61,7 @@ export default async function ContactsPage() {
     redirect("/login");
   }
 
-  const contacts = await getContacts();
+  const { rows, rawCount } = await getContacts();
 
   return (
     <div className="space-y-6">
@@ -46,12 +74,12 @@ export default async function ContactsPage() {
           <CardTitle className="text-lg text-slate-200">Synced Contacts</CardTitle>
         </CardHeader>
         <CardContent>
-          {contacts.length === 0 ? (
+          {rawCount === 0 ? (
             <div className="rounded-md border border-slate-800 bg-slate-900 px-4 py-10 text-center text-slate-500 text-sm">
               No contacts found. Have employees turn ON call monitoring to sync contacts.
             </div>
           ) : (
-            <ContactsTableClient contacts={contacts} />
+            <ContactsTableClient contacts={rows} rawCount={rawCount} />
           )}
         </CardContent>
       </Card>

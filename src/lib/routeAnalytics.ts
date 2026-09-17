@@ -264,6 +264,23 @@ export function idleEventAt(events: IdleEvent[], idx: number): IdleEvent | null 
   return events.find((e) => idx >= e.startIdx && idx <= e.endIdx) ?? null;
 }
 
+export type PointStatus = "start" | "end" | "idle" | "moving";
+
+/** What the vehicle was doing at [idx] — drives the Start/End/Idle/Moving badge on a data point. */
+export function statusAt(points: RoutePoint[], idle: IdleEvent[], idx: number): PointStatus {
+  if (idx <= 0) return "start";
+  if (idx >= points.length - 1) return "end";
+  return idleEventAt(idle, idx) ? "idle" : "moving";
+}
+
+/** Distance travelled (km) from the start of the route up to and including [idx]. */
+export function distanceUpToKm(points: RoutePoint[], idx: number): number {
+  let m = 0;
+  const end = Math.min(idx, points.length - 1);
+  for (let i = 1; i <= end; i++) m += haversineM(points[i - 1], points[i]);
+  return m / 1000;
+}
+
 /**
  * Idle time accumulated from the start of the route up to (and including) [idx],
  * counting only the elapsed part of a stop the cursor is currently inside.

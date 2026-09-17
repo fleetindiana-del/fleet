@@ -22,12 +22,14 @@ interface EnrollmentCode {
   employeeName?: string;
   employeeId?: string;
   role: "driver" | "employee";
+  departmentId?: string | { _id: string; name: string };
   vehicle?: string | { id?: string; registration?: string };
   capabilities?: {
     callMonitoring?: boolean;
     locationTracking?: boolean;
     expenseManagement?: boolean;
   } | string[];
+  deviceSetupStatus?: "pending" | "installed";
   expiresAt?: string;
   usedAt?: string;
   revoked: boolean;
@@ -38,12 +40,14 @@ const defaultForm = {
   employeeName: "",
   employeeId: "",
   role: "driver" as "driver" | "employee",
+  departmentId: "",
   vehicle: "",
   username: "",
   password: "",
   callMonitoring: true,
   locationTracking: true,
   expenseManagement: true,
+  deviceSetupStatus: "pending" as "pending" | "installed",
   // Codes never expire unless the admin opts in.
   setExpiry: false,
   expiresInHours: 48,
@@ -51,6 +55,7 @@ const defaultForm = {
 
 export default function EnrollmentPage() {
   const [codes, setCodes] = useState<EnrollmentCode[]>([]);
+  const [departments, setDepartments] = useState<Array<{ _id: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(defaultForm);
@@ -67,7 +72,16 @@ export default function EnrollmentPage() {
     finally { setIsLoading(false); }
   }, []);
 
-  useEffect(() => { fetchCodes(); }, [fetchCodes]);
+  const fetchDepartments = useCallback(async () => {
+    try {
+      const res = await fetch("/api/departments", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDepartments(Array.isArray(data) ? data : []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchCodes(); fetchDepartments(); }, [fetchCodes, fetchDepartments]);
 
   const handleSubmit = async () => {
     if (!form.employeeName.trim()) {
@@ -88,6 +102,7 @@ export default function EnrollmentPage() {
         employeeName: form.employeeName.trim(),
         employeeId: form.employeeId.trim(),
         role: form.role,
+        departmentId: form.departmentId,
         vehicle: form.vehicle.trim(),
         username: form.username.trim(),
         password: form.password,
@@ -99,6 +114,7 @@ export default function EnrollmentPage() {
           locationTracking: form.locationTracking,
           expenseManagement: form.expenseManagement,
         },
+        deviceSetupStatus: form.deviceSetupStatus,
       };
       const res = await fetch("/api/enrollment-codes", {
         method: "POST",
@@ -128,6 +144,28 @@ export default function EnrollmentPage() {
     if (c.usedAt) return { label: "Used", cls: "border-emerald-500/50 text-emerald-400 bg-emerald-500/10" };
     if (c.expiresAt && new Date(c.expiresAt) < new Date()) return { label: "Expired", cls: "border-rose-500/50 text-rose-400 bg-rose-500/10" };
     return { label: "Active", cls: "border-indigo-500/50 text-indigo-400 bg-indigo-500/10" };
+  };
+
+  // A redeemed code (usedAt set) means the handset actually enrolled, which is
+  // stronger evidence than whatever the admin picked when the code was made.
+  const getDeviceSetupStatus = (c: EnrollmentCode) => {
+    if (c.usedAt || c.deviceSetupStatus === "installed") {
+      return { label: "Installed", cls: "border-emerald-500/50 text-emerald-400 bg-emerald-500/10" };
+    }
+    return { label: "Pending", cls: "border-amber-500/50 text-amber-400 bg-amber-500/10" };
+  };
+
+  const departmentName = (c: EnrollmentCode) =>
+    typeof c.departmentId === "object" && c.departmentId ? c.departmentId.name : "—";
+
+  const accessLabels = (c: EnrollmentCode) => {
+    const caps = c.capabilities;
+    if (!caps || Array.isArray(caps)) return [];
+    const labels: string[] = [];
+    if (caps.callMonitoring) labels.push("Call Logs");
+    if (caps.locationTracking) labels.push("Route Tracking");
+    if (caps.expenseManagement) labels.push("Expenses");
+    return labels;
   };
 
   return (
@@ -165,35 +203,48 @@ export default function EnrollmentPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-sm text-slate-300">Role</label>
+                  <label className="text-sm text-slate-300">Type</label>
                   <select
                     value={form.role}
                     onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as "driver" | "employee" }))}
                     className="w-full h-10 rounded-md bg-slate-950 border border-slate-700 text-slate-200 px-3 text-sm"
                   >
                     <option value="driver">Driver</option>
-                    <option value="employee">Employee</option>
+                    <option value="employee">Staff</option>
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm text-slate-300">Vehicle</label>
-                  <Input
-                    placeholder="e.g. MH12AB1234"
-                    value={form.vehicle}
-                    onChange={(e) => setForm((f) => ({ ...f, vehicle: e.target.value }))}
-                    className="bg-slate-950 border-slate-700 text-slate-200 placeholder:text-slate-600"
-                  />
+                  <label className="text-sm text-slate-300">Department</label>
+                  <select
+                    value={form.departmentId}
+                    onChange={(e) => setForm((f) => ({ ...f, departmentId: e.target.value }))}
+                    className="w-full h-10 rounded-md bg-slate-950 border border-slate-700 text-slate-200 px-3 text-sm"
+                  >
+                    <option value="">No department</option>
+                    {departments.map((d) => (
+                      <option key={d._id} value={d._id}>{d.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Vehicle</label>
+                <Input
+                  placeholder="e.g. MH12AB1234"
+                  value={form.vehicle}
+                  onChange={(e) => setForm((f) => ({ ...f, vehicle: e.target.value }))}
+                  className="bg-slate-950 border-slate-700 text-slate-200 placeholder:text-slate-600"
+                />
+              </div>
               <div className="space-y-2">
-                <label className="text-sm text-slate-300">Capabilities</label>
+                <label className="text-sm text-slate-300">Access / Permissions</label>
                 <label className="flex items-center gap-2 text-sm text-slate-200">
                   <input
                     type="checkbox"
                     checked={form.callMonitoring}
                     onChange={(e) => setForm((f) => ({ ...f, callMonitoring: e.target.checked }))}
                   />
-                  Call monitoring
+                  Call Logs
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-200">
                   <input
@@ -201,7 +252,7 @@ export default function EnrollmentPage() {
                     checked={form.locationTracking}
                     onChange={(e) => setForm((f) => ({ ...f, locationTracking: e.target.checked }))}
                   />
-                  GPS / location tracking
+                  Route Tracking
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-200">
                   <input
@@ -209,8 +260,19 @@ export default function EnrollmentPage() {
                     checked={form.expenseManagement}
                     onChange={(e) => setForm((f) => ({ ...f, expenseManagement: e.target.checked }))}
                   />
-                  Expense management
+                  Expenses
                 </label>
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm text-slate-300">Device Setup Status</label>
+                <select
+                  value={form.deviceSetupStatus}
+                  onChange={(e) => setForm((f) => ({ ...f, deviceSetupStatus: e.target.value as "pending" | "installed" }))}
+                  className="w-full h-10 rounded-md bg-slate-950 border border-slate-700 text-slate-200 px-3 text-sm"
+                >
+                  <option value="pending">Pending — not yet installed</option>
+                  <option value="installed">Installed — device configured</option>
+                </select>
               </div>
               <div className="space-y-2 pt-1 border-t border-slate-800">
                 <label className="text-sm text-slate-300">
@@ -309,14 +371,17 @@ export default function EnrollmentPage() {
         </div>
       </div>
 
-      <Card className="bg-slate-900 border-slate-800 text-slate-100">
+      <Card className="bg-slate-900 border-slate-800 text-slate-100 overflow-x-auto">
         <Table>
           <TableHeader className="bg-slate-950/50">
             <TableRow className="border-slate-800">
               <TableHead className="text-slate-400">Code</TableHead>
               <TableHead className="text-slate-400">Employee</TableHead>
-              <TableHead className="text-slate-400">Role</TableHead>
+              <TableHead className="text-slate-400">Type</TableHead>
+              <TableHead className="text-slate-400">Department</TableHead>
+              <TableHead className="text-slate-400">Access</TableHead>
               <TableHead className="text-slate-400">Vehicle</TableHead>
+              <TableHead className="text-slate-400">Device Setup</TableHead>
               <TableHead className="text-slate-400">Status</TableHead>
               <TableHead className="text-slate-400">Expires</TableHead>
               <TableHead className="text-slate-400">Used At</TableHead>
@@ -325,13 +390,13 @@ export default function EnrollmentPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={10} className="h-32 text-center">
                   <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-500" />
                 </TableCell>
               </TableRow>
             ) : codes.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={10} className="h-32 text-center">
                   <div className="flex flex-col items-center gap-2 text-slate-500">
                     <QrCode className="w-8 h-8" />
                     <p>No enrollment codes yet.</p>
@@ -340,6 +405,8 @@ export default function EnrollmentPage() {
               </TableRow>
             ) : codes.map((c) => {
               const { label, cls } = getCodeStatus(c);
+              const setup = getDeviceSetupStatus(c);
+              const access = accessLabels(c);
               return (
                 <TableRow key={c._id} className="border-slate-800 hover:bg-slate-800/40">
                   <TableCell>
@@ -363,13 +430,32 @@ export default function EnrollmentPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={c.role === "driver" ? "border-amber-500/50 text-amber-400 bg-amber-500/10" : "border-cyan-500/50 text-cyan-400 bg-cyan-500/10"}>
-                      {c.role}
+                      {c.role === "driver" ? "Driver" : "Staff"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-slate-300 text-sm">
+                    {departmentName(c)}
+                  </TableCell>
+                  <TableCell>
+                    {access.length === 0 ? (
+                      <span className="text-slate-600">—</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {access.map((a) => (
+                          <Badge key={a} variant="outline" className="border-slate-600 text-slate-300 bg-slate-500/10 text-xs">
+                            {a}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-slate-400 font-mono text-sm">
                     {typeof c.vehicle === "string"
                       ? c.vehicle
                       : c.vehicle?.registration || c.vehicle?.id || <span className="text-slate-600">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={setup.cls}>{setup.label}</Badge>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cls}>{label}</Badge>
