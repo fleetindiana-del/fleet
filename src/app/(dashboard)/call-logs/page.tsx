@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, XCircle, ChevronDown, Clock, CheckCircle2, X, Filter, Pencil, Check, ChevronUp } from "lucide-react";
-import { format, addDays, subDays, startOfDay, endOfDay } from "date-fns";
+import { format, addDays, subDays, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { normalizePhoneNumber } from "@/lib/phone";
@@ -1718,7 +1718,18 @@ export default function CallLogsPage() {
     if (dateFilter !== "TODAY")
       filters.push({
         id: "date",
-        label: dateFilter === "ALL" ? "All Time" : dateFilter === "YESTERDAY" ? "Yesterday" : dateFilter === "CUSTOM" ? "Custom range" : dateFilter,
+        label:
+          dateFilter === "ALL"
+            ? "All Time"
+            : dateFilter === "YESTERDAY"
+              ? "Yesterday"
+              : dateFilter === "CUSTOM"
+                ? dateRange?.from
+                  ? dateRange.to && !isSameDay(dateRange.from, dateRange.to)
+                    ? `${format(dateRange.from, "MMM d")} – ${format(dateRange.to, "MMM d, y")}`
+                    : format(dateRange.from, "MMM d, y")
+                  : "Custom range"
+                : dateFilter,
         onRemove: () => { setDateFilter("TODAY"); setDateRange(undefined); },
       });
     if (ignoredGraphEmployees.length > 0)

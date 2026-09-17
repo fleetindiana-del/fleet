@@ -5,6 +5,7 @@ import connectToDatabase from "@/lib/db";
 import Contact from "@/models/Contact";
 import mongoose from "mongoose";
 import { normalizePhoneNumber } from "@/lib/phone";
+import { phoneKeyOf } from "@/lib/contactNormalize";
 
 export async function POST(req: Request) {
   try {
@@ -27,39 +28,39 @@ export async function POST(req: Request) {
     
     // Step 1: Normalize all inputs
     const normalizedToOriginal = new Map<string, string[]>();
-    const safeRegexPatterns: RegExp[] = [];
+    const phoneKeys: string[] = [];
 
     for (const rawPhone of phoneNumbers) {
       const normalized = normalizePhoneNumber(rawPhone);
-      
+
       // Store mapping from normalized to original so we can map tags back to the exact strings the frontend sent
       if (!normalizedToOriginal.has(normalized)) {
          normalizedToOriginal.set(normalized, []);
       }
       normalizedToOriginal.get(normalized)!.push(rawPhone);
 
-      // We extract the last 10 digits as a robust matching string for the DB query 
+      // We extract the last 10 digits as a robust matching string for the DB query
       // because DB strings might be raw like '7884551235' or '+917884551235'.
-      const digitsOnly = normalized.replace(/\D/g, "");
-      const last10 = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
-      
+      // Contact.phoneKey stores exactly this, indexed, so this is a plain
+      // equality lookup rather than a per-number regex scan.
+      const last10 = phoneKeyOf(normalized);
+
       if (last10 && last10.length >= 7) { // Only add sensible lengths
-        // We match if the DB phone number ends with these 10 digits
-        safeRegexPatterns.push(new RegExp(`${last10}$`));
+        phoneKeys.push(last10);
       }
     }
 
-    if (safeRegexPatterns.length === 0) {
+    if (phoneKeys.length === 0) {
        return NextResponse.json({ tags: {} });
     }
 
     // Step 2: Fetch matches from DB for the user's company (unless super_admin testing)
     const baseQuery: any = {
-      phoneNumber: { $in: safeRegexPatterns }
+      phoneKey: { $in: phoneKeys }
     };
 
     // Contacts don't currently have a companyId field on the schema, but they are tied to deviceId or employeeName.
-    // If you add tenant isolation for Contacts in the future, you'd add companyId logic here. 
+    // If you add tenant isolation for Contacts in the future, you'd add companyId logic here.
     // Right now, the schema `Contact` does not have `companyId`.
 
     const contacts = await Contact.find(baseQuery).select("phoneNumber contactName employeeName timestamp deviceId").lean();

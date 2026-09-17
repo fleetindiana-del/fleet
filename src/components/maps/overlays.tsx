@@ -16,7 +16,7 @@ export function Polyline({
   ...options
 }: {
   path: LatLng[];
-  onClick?: () => void;
+  onClick?: (e: google.maps.PolyMouseEvent) => void;
 } & google.maps.PolylineOptions) {
   const map = useMap();
   const mapsLib = useMapsLibrary("maps");
@@ -36,7 +36,9 @@ export function Polyline({
     const line = new mapsLib.Polyline();
     line.setMap(map);
     lineRef.current = line;
-    const listener = line.addListener("click", () => clickRef.current?.());
+    const listener = line.addListener("click", (e: google.maps.PolyMouseEvent) =>
+      clickRef.current?.(e)
+    );
     return () => {
       listener.remove();
       line.setMap(null);

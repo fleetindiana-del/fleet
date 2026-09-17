@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import {
   Loader2,
   Route,
@@ -14,9 +14,6 @@ import {
   Ruler,
   Flag,
   Menu,
-  Search,
-  X,
-  List,
   ChevronDown,
   ChevronUp,
   Minus,
@@ -42,10 +39,16 @@ import {
   batteryStats,
   idleEventAt,
   idleMsUpTo,
+  IDLE_COLOR,
+  VIOLATION_COLOR,
   type MaxSpeed,
   type TripStats,
+  type IdleEvent,
 } from "@/lib/routeAnalytics";
-import type { FocusTarget } from "./RouteHistoryMap";
+import type { FocusTarget, MapSelection } from "./RouteHistoryMap";
+import { type FleetDevice, deviceDisplayName } from "./deviceUtils";
+import { EmployeeCombobox } from "./EmployeeCombobox";
+import { DateRangeSelector, type RouteDateSelection } from "./DateRangeSelector";
 
 const RouteHistoryMap = dynamic(() => import("./RouteHistoryMap"), { ssr: false });
 
@@ -82,13 +85,7 @@ interface LocationPoint {
   isStationary?: boolean;
 }
 
-interface FleetDevice {
-  deviceId: string;
-  employeeName?: string;
-  vehicle?: string | { id?: string; registration?: string };
-}
-
-type EventFilter = "all" | "idle" | "violations" | "stops" | "trips" | "max";
+type EventFilter = "all" | "violations" | "trips" | "max";
 
 const STATUS_CHIP: Record<string, string> = {
   ACTIVE: "bg-emerald-500 text-white",
@@ -98,7 +95,7 @@ const STATUS_CHIP: Record<string, string> = {
 
 const SPEED_LIMIT_KEY = "fleet.route.speedLimit.";
 
-const PLAYBACK_SPEEDS = [0.1, 0.5, 1, 2, 4] as const;
+const PLAYBACK_SPEEDS = [0.05, 0.1, 0.5, 1, 2, 4] as const;
 /** Half speed by default — 1× stepped through a day's route too fast to follow. */
 const DEFAULT_PLAYBACK_SPEED = 0.5;
 /** Frame interval at 1×; slower rates stretch it instead of taking part-steps. */
@@ -114,16 +111,6 @@ const PLAYBACK_TICK_MS = 60;
  * still there for covering ground quickly.
  */
 const MAX_PLAYBACK_STEP = 4;
-
-function vehicleLabel(vehicle: FleetDevice["vehicle"]): string | undefined {
-  if (!vehicle) return undefined;
-  if (typeof vehicle === "string") return vehicle;
-  return vehicle.registration || vehicle.id;
-}
-
-function deviceDisplayName(d: FleetDevice): string {
-  return d.employeeName?.trim() || vehicleLabel(d.vehicle) || d.deviceId;
-}
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   const fallback = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
@@ -154,13 +141,14 @@ export default function RouteHistoryPage() {
   const { open } = useSidebar();
   const [devices, setDevices] = useState<FleetDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  const [deviceQuery, setDeviceQuery] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
-  const [startTime, setStartTime] = useState("00:00");
-  const [endTime, setEndTime] = useState("23:59");
+  const [dateSelection, setDateSelection] = useState<RouteDateSelection>({
+    mode: "single",
+    date: today,
+    startTime: "00:00",
+    endTime: "23:59",
+  });
   const [formError, setFormError] = useState("");
   const [speedLimitKmh, setSpeedLimitKmh] = useState(60);
 
@@ -169,6 +157,15 @@ export default function RouteHistoryPage() {
   const [points, setPoints] = useState<LocationPoint[]>([]);
   const [sessions, setSessions] = useState<LocationSession[]>([]);
   const [selectedSubTrip, setSelectedSubTrip] = useState<string | null>(null);
+
+  // What's actually on screen right now, so the UI can flag it when the
+  // employee/date/time filters have moved on without a "View route" yet —
+  // otherwise the map keeps showing a route for a selection that no longer
+  // matches the filters above it.
+  const [queriedParams, setQueriedParams] = useState<{
+    deviceId: string;
+    dateSelection: RouteDateSelection;
+  } | null>(null);
 
   const [startPlace, setStartPlace] = useState("");
   const [endPlace, setEndPlace] = useState("");
@@ -180,14 +177,17 @@ export default function RouteHistoryPage() {
   // Collapsible panels
   const [filtersMinimized, setFiltersMinimized] = useState(false);
   const [statsMinimized, setStatsMinimized] = useState(false);
+  const [idleMinimized, setIdleMinimized] = useState(false);
   const [timelineMinimized, setTimelineMinimized] = useState(false);
   const [tripsMinimized, setTripsMinimized] = useState(false);
   const [legendOpen, setLegendOpen] = useState(true);
 
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [focus, setFocus] = useState<FocusTarget>(null);
-
-  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+  // Mirrors whichever marker is currently open on the map, so clicking it
+  // highlights the matching Idle Stop / Event row below — the reverse of
+  // clicking a row panning the map (via `focus`, above).
+  const [mapSelection, setMapSelection] = useState<MapSelection>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,14 +208,6 @@ export default function RouteHistoryPage() {
   }, []);
 
   useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (!searchWrapRef.current?.contains(e.target as Node)) setPickerOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  useEffect(() => {
     setSpeedLimitKmh(loadSpeedLimit(selectedDeviceId));
   }, [selectedDeviceId]);
 
@@ -225,19 +217,6 @@ export default function RouteHistoryPage() {
       localStorage.setItem(SPEED_LIMIT_KEY + selectedDeviceId, String(v));
     }
   };
-
-  const filteredDevices = useMemo(() => {
-    const q = deviceQuery.trim().toLowerCase();
-    const list = [...devices].sort((a, b) =>
-      deviceDisplayName(a).localeCompare(deviceDisplayName(b))
-    );
-    if (!q) return list;
-    return list.filter((d) => {
-      const vehicle = vehicleLabel(d.vehicle) || "";
-      const hay = `${d.employeeName || ""} ${vehicle} ${d.deviceId}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [devices, deviceQuery]);
 
   const selectedDevice = devices.find((d) => d.deviceId === selectedDeviceId) || null;
   const selectedLabel = selectedDevice ? deviceDisplayName(selectedDevice) : "";
@@ -279,13 +258,15 @@ export default function RouteHistoryPage() {
     [displayedPoints, idleEvents]
   );
 
-  const showIdle = eventFilter === "all" || eventFilter === "idle" || eventFilter === "stops";
+  // Idle stops now have their own dedicated panel (below Stats), always
+  // visible on the map rather than gated behind the Events filter.
+  const showIdle = true;
   const showViolations = eventFilter === "all" || eventFilter === "violations";
   const showMaxSpeed = eventFilter === "all" || eventFilter === "max";
 
   type TimelineItem = {
     id: string;
-    kind: "start" | "end" | "idle" | "violation" | "max" | "trip";
+    kind: "start" | "end" | "violation" | "max" | "trip";
     time: string;
     title: string;
     subtitle: string;
@@ -306,17 +287,6 @@ export default function RouteHistoryPage() {
       subtitle: format(new Date(first.recordedAt), "HH:mm:ss"),
       focus: { type: "point", idx: 0 },
     });
-
-    for (const e of idleEvents) {
-      items.push({
-        id: e.id,
-        kind: "idle",
-        time: e.startTime,
-        title: `Idle · ${formatDuration(e.durationMs)}`,
-        subtitle: `${format(new Date(e.startTime), "HH:mm")} – ${format(new Date(e.endTime), "HH:mm")}`,
-        focus: { type: "idle", id: e.id },
-      });
-    }
 
     for (const v of violations) {
       items.push({
@@ -366,13 +336,12 @@ export default function RouteHistoryPage() {
 
     return items.filter((it) => {
       if (eventFilter === "all") return true;
-      if (eventFilter === "idle" || eventFilter === "stops") return it.kind === "idle";
       if (eventFilter === "violations") return it.kind === "violation";
       if (eventFilter === "max") return it.kind === "max";
       if (eventFilter === "trips") return it.kind === "trip" || it.kind === "start" || it.kind === "end";
       return true;
     });
-  }, [displayedPoints, idleEvents, violations, maxSpd, sessions, speedLimitKmh, eventFilter]);
+  }, [displayedPoints, violations, maxSpd, sessions, speedLimitKmh, eventFilter]);
 
   const resetPlayback = () => {
     setIsPlaying(false);
@@ -383,14 +352,25 @@ export default function RouteHistoryPage() {
   const viewRoute = useCallback(async () => {
     if (!selectedDeviceId) {
       setFormError("Select a device first.");
-      setPickerOpen(true);
       return;
     }
-    const from = new Date(`${date}T${startTime}:00`);
-    const to = new Date(`${date}T${endTime}:59`);
-    if (from.getTime() >= to.getTime()) {
-      setFormError("Start time must be before end time.");
-      return;
+
+    let from: Date;
+    let to: Date;
+    if (dateSelection.mode === "single") {
+      from = new Date(`${dateSelection.date}T${dateSelection.startTime}:00`);
+      to = new Date(`${dateSelection.date}T${dateSelection.endTime}:59`);
+      if (from.getTime() >= to.getTime()) {
+        setFormError("Start time must be before end time.");
+        return;
+      }
+    } else {
+      from = new Date(`${dateSelection.fromDate}T00:00:00`);
+      to = new Date(`${dateSelection.toDate}T23:59:59`);
+      if (from.getTime() > to.getTime()) {
+        setFormError("From date must be before the To date.");
+        return;
+      }
     }
     setFormError("");
     setIsLoading(true);
@@ -436,16 +416,39 @@ export default function RouteHistoryPage() {
         reverseGeocode(first.latitude, first.longitude).then(setStartPlace);
         reverseGeocode(last.latitude, last.longitude).then(setEndPlace);
       }
+
+      setQueriedParams({ deviceId: selectedDeviceId, dateSelection });
     } catch {
       setPoints([]);
     } finally {
       setIsLoading(false);
     }
-  }, [selectedDeviceId, date, startTime, endTime]);
+  }, [selectedDeviceId, dateSelection]);
+
+  // True once the employee/date/time filters have changed since the route on
+  // screen was fetched — the displayed data is now stale relative to them.
+  const filtersStale =
+    !!queriedParams &&
+    (queriedParams.deviceId !== selectedDeviceId ||
+      JSON.stringify(queriedParams.dateSelection) !== JSON.stringify(dateSelection));
 
   useEffect(() => {
     resetPlayback();
   }, [selectedSubTrip]);
+
+  // Clicking a marker on the map (Start/End/Max/Idle/Violation) scrolls the
+  // matching sidebar row into view — the map-click half of the two-way sync
+  // (sidebar-click-pans-the-map is the `focus` state above).
+  useEffect(() => {
+    if (!mapSelection) return;
+    const selector =
+      mapSelection.kind === "idle"
+        ? `[data-idle-id="${mapSelection.id}"]`
+        : mapSelection.kind === "violation"
+          ? `[data-timeline-id="${mapSelection.id}"]`
+          : `[data-timeline-id="${mapSelection.kind}"]`;
+    document.querySelector(selector)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [mapSelection]);
 
   useEffect(() => {
     if (!isPlaying || displayedPoints.length < 2) return;
@@ -462,7 +465,7 @@ export default function RouteHistoryPage() {
     const tickMs =
       speed >= 1
         ? PLAYBACK_TICK_MS
-        : Math.min(1000, Math.max(30, Math.round(PLAYBACK_TICK_MS / (speed * baseStep))));
+        : Math.min(2000, Math.max(30, Math.round(PLAYBACK_TICK_MS / (speed * baseStep))));
     const id = setInterval(() => {
       setPlaybackIndex((idx) => {
         const next = (idx ?? 0) + step;
@@ -513,7 +516,8 @@ export default function RouteHistoryPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `route-${selectedDeviceId?.slice(0, 8)}-${date}.csv`;
+    const fileDate = dateSelection.mode === "single" ? dateSelection.date : `${dateSelection.fromDate}_to_${dateSelection.toDate}`;
+    a.download = `route-${selectedDeviceId?.slice(0, 8)}-${fileDate}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -574,21 +578,12 @@ export default function RouteHistoryPage() {
 
   const hasRoute = displayedPoints.length > 0 && !!stats;
 
-  const pickDevice = (d: FleetDevice) => {
-    setSelectedDeviceId(d.deviceId);
-    setDeviceQuery(deviceDisplayName(d));
-    setPickerOpen(false);
-    setFormError("");
-  };
-
   const kindIcon = (kind: TimelineItem["kind"]) => {
     switch (kind) {
       case "start":
         return <Flag className="h-3.5 w-3.5 text-emerald-500" />;
       case "end":
         return <Flag className="h-3.5 w-3.5 text-rose-500" />;
-      case "idle":
-        return <PauseCircle className="h-3.5 w-3.5 text-purple-500" />;
       case "violation":
         return <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />;
       case "max":
@@ -613,6 +608,7 @@ export default function RouteHistoryPage() {
         showMaxSpeed={showMaxSpeed}
         focus={focus}
         onFocusConsumed={() => setFocus(null)}
+        onSelect={setMapSelection}
       />
 
       {isLoading && (
@@ -626,132 +622,51 @@ export default function RouteHistoryPage() {
 
       {/* ─── Left column ─── */}
       <div className="absolute left-3 top-3 z-[1100] flex w-[min(calc(100%-1.5rem),24rem)] flex-col gap-2 sm:left-4 sm:top-4">
-        {/* Search */}
-        <div ref={searchWrapRef} className="relative">
-          <div className="flex items-center gap-1 rounded-full bg-white pl-2 pr-2 shadow-[0_2px_8px_rgba(0,0,0,0.18)]">
-            <button
-              type="button"
-              onClick={() => open()}
-              className="rounded-full p-2.5 text-slate-600 hover:bg-slate-100 sm:hidden"
-              aria-label="Open menu"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-            <Search className="ml-1 hidden h-4 w-4 shrink-0 text-slate-400 sm:block" />
-            <input
-              value={deviceQuery}
-              onChange={(e) => {
-                setDeviceQuery(e.target.value);
-                setPickerOpen(true);
-                if (!e.target.value) setSelectedDeviceId(null);
-              }}
-              onFocus={() => setPickerOpen(true)}
-              placeholder="Search by name or vehicle…"
-              className="h-12 min-w-0 flex-1 bg-transparent text-[15px] text-slate-800 outline-none placeholder:text-slate-400"
-            />
-            {deviceQuery ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setDeviceQuery("");
-                  setSelectedDeviceId(null);
-                  setPickerOpen(true);
-                }}
-                className="rounded-full p-2 text-slate-400 hover:bg-slate-100"
-                aria-label="Clear"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setPickerOpen((v) => !v)}
-                className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
-                aria-label="Device list"
-              >
-                <List className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          {pickerOpen && (
-            <div className="mt-2 max-h-[min(42vh,20rem)] overflow-y-auto rounded-2xl bg-white py-1 shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
-              {filteredDevices.length === 0 ? (
-                <div className="px-4 py-6 text-center text-sm text-slate-500">
-                  {devices.length === 0 ? "No devices yet" : "No matches"}
-                </div>
-              ) : (
-                filteredDevices.map((d) => {
-                  const vehicle = vehicleLabel(d.vehicle);
-                  const active = selectedDeviceId === d.deviceId;
-                  const color = deviceColor(d.deviceId);
-                  return (
-                    <button
-                      key={d.deviceId}
-                      type="button"
-                      onClick={() => pickDevice(d)}
-                      className={`flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 ${
-                        active ? "bg-indigo-50/70" : ""
-                      }`}
-                    >
-                      <span
-                        className="mt-1 inline-block h-3 w-3 shrink-0 rounded-full ring-2 ring-white"
-                        style={{ background: color }}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-900">
-                          {deviceDisplayName(d)}
-                        </span>
-                        <span className="mt-0.5 block truncate text-xs text-slate-500">
-                          {[vehicle && vehicle !== deviceDisplayName(d) ? vehicle : null, `ID ${d.deviceId.slice(0, 8)}…`]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Filters panel (collapsible) */}
+        {/* Filters panel (collapsible) — Active Employee first, then the
+            Date/Time range that's scoped to whoever is selected, so the two
+            read as one connected filter rather than separate controls. */}
         <CollapsiblePanel
           title="Route History"
+          subtitle={
+            selectedLabel
+              ? `${selectedLabel} · ${
+                  dateSelection.mode === "single"
+                    ? format(new Date(`${dateSelection.date}T00:00:00`), "MMM d, y")
+                    : `${format(new Date(`${dateSelection.fromDate}T00:00:00`), "MMM d")} – ${format(new Date(`${dateSelection.toDate}T00:00:00`), "MMM d, y")}`
+                }`
+              : "No employee selected"
+          }
           minimized={filtersMinimized}
           onToggle={() => setFiltersMinimized((v) => !v)}
           accent={accent}
+          leading={
+            <button
+              type="button"
+              onClick={() => open()}
+              className="-ml-1 rounded-full p-1.5 text-slate-500 hover:bg-slate-100 sm:hidden"
+              aria-label="Open menu"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+          }
         >
-          <div className="grid grid-cols-3 gap-2">
-            <label className="col-span-3 sm:col-span-1">
-              <span className="mb-1 block text-[11px] font-medium text-slate-500">Date</span>
-              <input
-                type="date"
-                value={date}
-                max={today}
-                onChange={(e) => setDate(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-800 outline-none focus:border-indigo-400"
-              />
-            </label>
-            <label>
-              <span className="mb-1 block text-[11px] font-medium text-slate-500">Start</span>
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-800 outline-none focus:border-indigo-400"
-              />
-            </label>
-            <label>
-              <span className="mb-1 block text-[11px] font-medium text-slate-500">End</span>
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-800 outline-none focus:border-indigo-400"
-              />
-            </label>
+          {/* Active Employee */}
+          <EmployeeCombobox
+            devices={devices}
+            selectedDeviceId={selectedDeviceId}
+            onSelect={(d) => {
+              setSelectedDeviceId(d.deviceId);
+              setFormError("");
+            }}
+            onClear={() => setSelectedDeviceId(null)}
+          />
+
+          {/* Date / time range */}
+          <div className="mt-2">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">
+              Date
+            </span>
+            <DateRangeSelector value={dateSelection} onChange={setDateSelection} maxDate={today} />
           </div>
 
           <label className="mt-2 block">
@@ -769,11 +684,20 @@ export default function RouteHistoryPage() {
             />
           </label>
 
+          {filtersStale && !formError && (
+            <p className="mt-2 flex items-center gap-1 text-xs font-medium text-amber-600">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              Filters changed — the route below is for the previous selection.
+            </p>
+          )}
+
           <button
             type="button"
             onClick={viewRoute}
             disabled={isLoading}
-            className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-full text-sm font-semibold text-white shadow hover:brightness-110 disabled:opacity-60"
+            className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-full text-sm font-semibold text-white shadow hover:brightness-110 disabled:opacity-60 ${
+              filtersStale ? "ring-2 ring-amber-400 ring-offset-2" : ""
+            }`}
             style={{ background: accent }}
           >
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
@@ -857,6 +781,36 @@ export default function RouteHistoryPage() {
           </CollapsiblePanel>
         )}
 
+        {/* Idle Stops — placed below the main route/stats info, one row per
+            stop with its exact start, end, duration and location so it maps
+            1:1 onto the idle markers plotted on the route. */}
+        {hasRoute && (
+          <CollapsiblePanel
+            title="Idle Stops"
+            subtitle={`${idleEvents.length}`}
+            minimized={idleMinimized}
+            onToggle={() => setIdleMinimized((v) => !v)}
+            accent={accent}
+          >
+            {idleEvents.length === 0 ? (
+              <p className="py-4 text-center text-xs text-slate-400">No idle stops in this interval</p>
+            ) : (
+              <div className="max-h-[min(32vh,16rem)] space-y-1.5 overflow-y-auto">
+                {idleEvents.map((e, i) => (
+                  <IdleStopRow
+                    key={e.id}
+                    index={i + 1}
+                    event={e}
+                    batteryPercent={batteryAt(displayedPoints, e.startIdx)}
+                    active={mapSelection?.kind === "idle" && mapSelection.id === e.id}
+                    onClick={() => setFocus({ type: "idle", id: e.id })}
+                  />
+                ))}
+              </div>
+            )}
+          </CollapsiblePanel>
+        )}
+
         {/* Event timeline */}
         {hasRoute && (
           <CollapsiblePanel
@@ -870,7 +824,6 @@ export default function RouteHistoryPage() {
               {(
                 [
                   ["all", "All"],
-                  ["idle", "Idle"],
                   ["violations", "Speeding"],
                   ["max", "Max"],
                   ["trips", "Trips"],
@@ -897,10 +850,19 @@ export default function RouteHistoryPage() {
               {timeline.length === 0 ? (
                 <p className="py-4 text-center text-xs text-slate-400">No events for this filter</p>
               ) : (
-                timeline.map((it) => (
+                timeline.map((it) => {
+                  const selected =
+                    (it.kind === "start" && mapSelection?.kind === "start") ||
+                    (it.kind === "end" && mapSelection?.kind === "end") ||
+                    (it.kind === "max" && mapSelection?.kind === "max") ||
+                    (it.kind === "violation" &&
+                      mapSelection?.kind === "violation" &&
+                      mapSelection.id === it.id);
+                  return (
                   <button
                     key={it.id}
                     type="button"
+                    data-timeline-id={it.id}
                     onClick={() => {
                       if (it.kind === "trip") {
                         const sid = it.id.replace(/^trip-/, "");
@@ -908,7 +870,9 @@ export default function RouteHistoryPage() {
                       }
                       setFocus(it.focus);
                     }}
-                    className="flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
+                    className={`flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50 ${
+                      selected ? "bg-indigo-50 ring-1 ring-indigo-200" : ""
+                    }`}
                   >
                     <span className="mt-0.5">{kindIcon(it.kind)}</span>
                     <span className="min-w-0 flex-1">
@@ -918,7 +882,8 @@ export default function RouteHistoryPage() {
                       <span className="block truncate text-[11px] text-slate-500">{it.subtitle}</span>
                     </span>
                   </button>
-                ))
+                  );
+                })
               )}
             </div>
           </CollapsiblePanel>
@@ -995,36 +960,46 @@ export default function RouteHistoryPage() {
         </div>
       )}
 
-      {/* ─── Speed legend (bottom-left) ─── */}
+      {/* ─── Map legend (bottom-left) ─── */}
       {hasRoute && (
-        <div className="absolute bottom-20 left-3 z-[1100] sm:bottom-24 sm:left-4">
+        <div className="absolute bottom-20 left-3 z-[1100] max-h-[min(60vh,26rem)] overflow-y-auto sm:bottom-24 sm:left-4">
           <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.16)]">
             <button
               type="button"
               onClick={() => setLegendOpen((v) => !v)}
               className="flex w-full items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
-              <span>Speed legend</span>
+              <span>Map legend</span>
               {legendOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
             </button>
             {legendOpen && (
-              <div className="space-y-1.5 border-t border-slate-100 px-3 py-2">
-                {SPEED_BANDS.map((b) => (
-                  <div key={b.band} className="flex items-center gap-2 text-[11px] text-slate-600">
-                    <span className="h-2.5 w-6 rounded-full" style={{ background: b.color }} />
-                    <span>
-                      {b.label}
-                      {b.maxKmh !== Infinity
-                        ? b.band === "idle"
-                          ? ` (< ${b.maxKmh} km/h)`
-                          : ` (< ${b.maxKmh} km/h)`
-                        : " (≥ 70 km/h)"}
-                    </span>
-                  </div>
-                ))}
-                <div className="flex items-center gap-2 border-t border-slate-100 pt-1.5 text-[11px] text-slate-600">
-                  <span className="h-2.5 w-6 rounded-full" style={{ background: accent }} />
-                  <span>Device accent</span>
+              <div className="space-y-3 border-t border-slate-100 px-3 py-2">
+                {/* States — matches the marker glyphs plotted on the route */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    States
+                  </p>
+                  <LegendRow color="#10b981" glyph="S" label="Start" />
+                  <LegendRow color="#ef4444" glyph="E" label="End" />
+                  <LegendRow color={IDLE_COLOR} glyph="⏸" label="Idle / stopped" />
+                  <LegendRow color={accent} glyph="➤" label="Moving (device accent)" />
+                  <LegendRow color={VIOLATION_COLOR} glyph="!" label="Speeding" />
+                  <LegendRow color="#f59e0b" glyph="⚡" label="Max speed" />
+                </div>
+                {/* Speed — colours the drawn route by how fast each leg was */}
+                <div className="space-y-1.5 border-t border-slate-100 pt-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Speed
+                  </p>
+                  {SPEED_BANDS.map((b) => (
+                    <div key={b.band} className="flex items-center gap-2 text-[11px] text-slate-600">
+                      <span className="h-2.5 w-6 rounded-full" style={{ background: b.color }} />
+                      <span>
+                        {b.label}
+                        {b.maxKmh !== Infinity ? ` (< ${b.maxKmh} km/h)` : " (≥ 70 km/h)"}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -1156,6 +1131,7 @@ function CollapsiblePanel({
   children,
   actions,
   accent,
+  leading,
 }: {
   title: string;
   subtitle?: string;
@@ -1164,10 +1140,12 @@ function CollapsiblePanel({
   children: ReactNode;
   actions?: ReactNode;
   accent?: string;
+  leading?: ReactNode;
 }) {
   return (
     <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.16)]">
       <div className="flex items-center gap-2 px-3 py-2">
+        {leading}
         {accent && (
           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: accent }} />
         )}
@@ -1240,6 +1218,74 @@ function IconBtn({
       className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
     >
       {children}
+    </button>
+  );
+}
+
+/** One row in the Map legend's States section — mirrors a marker's PinGlyph. */
+function LegendRow({ color, glyph, label }: { color: string; glyph: string; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-slate-600">
+      <span
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+        style={{ background: color }}
+      >
+        {glyph}
+      </span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * One row per idle stop: exact start, end, duration and the coordinate the
+ * vehicle was actually parked at (idle.latitude/longitude are the recorded
+ * fix at startIdx — the same point drawn as the idle marker on the map), so
+ * this list and the markers never disagree.
+ */
+function IdleStopRow({
+  index,
+  event,
+  batteryPercent,
+  active,
+  onClick,
+}: {
+  index: number;
+  event: IdleEvent;
+  batteryPercent: number | null;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-idle-id={event.id}
+      onClick={onClick}
+      className={`w-full rounded-xl px-3 py-2 text-left hover:bg-slate-100 ${
+        active ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-50"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+          <PauseCircle className="h-3.5 w-3.5 text-purple-500" />
+          Stop {index}
+        </span>
+        <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-semibold text-purple-700">
+          {formatDuration(event.durationMs)}
+        </span>
+      </div>
+      <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+        <span>
+          Start <span className="font-medium text-slate-700">{format(new Date(event.startTime), "HH:mm:ss")}</span>
+        </span>
+        <span>
+          End <span className="font-medium text-slate-700">{format(new Date(event.endTime), "HH:mm:ss")}</span>
+        </span>
+        <span className="col-span-2 font-mono text-slate-500">
+          {event.latitude.toFixed(5)}, {event.longitude.toFixed(5)}
+        </span>
+        {batteryPercent != null && <span className="col-span-2">Battery {batteryPercent}%</span>}
+      </div>
     </button>
   );
 }

@@ -14,11 +14,14 @@ import {
   type IdleEvent,
   type ViolationSegment,
   type MaxSpeed,
+  type PointStatus,
   speedSegments,
   headingAt,
   speedKmh,
   batteryAt,
   idleEventAt,
+  statusAt,
+  distanceUpToKm,
   formatDuration,
   formatDurationPrecise,
   VIOLATION_COLOR,
@@ -35,6 +38,15 @@ export type FocusTarget =
   | { type: "bounds" }
   | null;
 
+/** What's currently opened on the map — mirrored back to the sidebar so a
+ * marker click highlights the matching Idle Stop / Event row, the same way a
+ * sidebar click already pans/opens the marker (see FocusTarget). */
+export type MapSelection =
+  | { kind: "start" | "end" | "max" }
+  | { kind: "idle"; id: string }
+  | { kind: "violation"; id: string }
+  | null;
+
 interface Props {
   points: LocationPoint[];
   playbackIndex?: number | null;
@@ -49,6 +61,7 @@ interface Props {
   showMaxSpeed?: boolean;
   focus?: FocusTarget;
   onFocusConsumed?: () => void;
+  onSelect?: (sel: MapSelection) => void;
 }
 
 /** routeAnalytics works in Leaflet's [lat, lng] tuples; Google wants literals. */
@@ -99,6 +112,11 @@ function FocusController({
     onConsumed?.();
   }, [focus, map, points, idleEvents, violations, onConsumed]);
   return null;
+}
+
+function idleElapsedAt(point: LocationPoint, idle: IdleEvent | null): number {
+  if (!idle) return 0;
+  return Math.max(0, new Date(point.recordedAt).getTime() - new Date(idle.startTime).getTime());
 }
 
 function fmtTime(iso: string) {
@@ -216,11 +234,50 @@ function IdleGlyph({ size = 32 }: { size?: number }) {
   );
 }
 
+/** Marks the fix nearest a click anywhere on the drawn route. */
+function InspectedPointGlyph({ size = 16 }: { size?: number }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: "#f59e0b",
+        border: "2.5px solid #fff",
+        boxShadow: "0 1px 4px rgba(0,0,0,.45)",
+      }}
+    />
+  );
+}
+
 function batteryTone(pct: number): string {
   if (pct <= 15) return "text-rose-600";
   if (pct <= 35) return "text-amber-600";
   return "text-emerald-600";
 }
+
+export const STATUS_LABEL: Record<PointStatus, string> = {
+  start: "Start",
+  end: "End",
+  idle: "Idle",
+  moving: "Moving",
+};
+
+/** Tone for a light (white InfoWindow) background. */
+const STATUS_TONE_LIGHT: Record<PointStatus, string> = {
+  start: "text-emerald-600",
+  end: "text-rose-600",
+  idle: "text-purple-600",
+  moving: "text-sky-600",
+};
+
+/** Tone for a dark (CursorHoverCard) background. */
+const STATUS_TONE: Record<PointStatus, string> = {
+  start: "text-emerald-400",
+  end: "text-rose-400",
+  idle: "text-purple-300",
+  moving: "text-sky-300",
+};
 
 /**
  * Readout that follows the route cursor. Rendered inside the marker's own DOM
@@ -232,17 +289,23 @@ function CursorHoverCard({
   battery,
   idle,
   idleElapsedMs,
+  status,
+  distanceKm,
 }: {
   point: LocationPoint;
   battery: number | null;
   idle: IdleEvent | null;
   idleElapsedMs: number;
+  status: PointStatus;
+  distanceKm: number;
 }) {
   return (
     <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 group-hover:block">
       <div className="w-max min-w-[168px] rounded-lg bg-slate-900/95 px-2.5 py-2 font-sans text-[11px] leading-tight text-white shadow-lg">
+        <DarkRow k="Status" v={STATUS_LABEL[status]} tone={STATUS_TONE[status]} />
         <DarkRow k="Time" v={fmtTime(point.recordedAt)} />
         <DarkRow k="Speed" v={`${speedKmh(point).toFixed(1)} km/h`} />
+        <DarkRow k="Distance" v={`${distanceKm.toFixed(2)} km`} />
         <DarkRow
           k="Battery"
           v={battery != null ? `${battery}%` : "—"}
@@ -286,8 +349,46 @@ export default function RouteHistoryMap({
   showMaxSpeed = true,
   focus = null,
   onFocusConsumed,
+  onSelect,
 }: Props) {
   const [openInfo, setOpenInfo] = useState<string | null>(null);
+  /** Index of the fix nearest the last click anywhere on the route. */
+  const [inspectedIdx, setInspectedIdx] = useState<number | null>(null);
+
+  // Mirror which marker is open back out to the parent, so clicking a marker
+  // on the map highlights the matching Idle Stop / Event row in the sidebar —
+  // the reverse of the sidebar-click-pans-the-map flow below.
+  useEffect(() => {
+    if (!onSelect) return;
+    if (openInfo === "start") onSelect({ kind: "start" });
+    else if (openInfo === "end") onSelect({ kind: "end" });
+    else if (openInfo === "max") onSelect({ kind: "max" });
+    else if (openInfo?.startsWith("idle:")) onSelect({ kind: "idle", id: openInfo.slice(5) });
+    else if (openInfo?.startsWith("v:")) onSelect({ kind: "violation", id: openInfo.slice(2) });
+    else if (openInfo?.startsWith("vp:")) onSelect({ kind: "violation", id: openInfo.slice(3) });
+    else onSelect(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onSelect identity isn't part of the sync
+  }, [openInfo]);
+
+  // Selecting a row in the sidebar (Idle Stops, Events) should feel the same
+  // as clicking the matching marker directly: pan there (FocusController,
+  // below) AND pop its InfoWindow, so the list and the map never disagree
+  // about which stop/violation/point is being looked at. Adjusted during
+  // render off a change signature — same pattern as routeKey/lastRouteKey
+  // below — rather than in an effect, since this is deriving state from a
+  // prop change, not synchronizing with an external system.
+  const focusKey = focus ? JSON.stringify(focus) : "";
+  const [lastFocusKey, setLastFocusKey] = useState(focusKey);
+  if (lastFocusKey !== focusKey) {
+    setLastFocusKey(focusKey);
+    if (focus?.type === "idle") setOpenInfo(`idle:${focus.id}`);
+    else if (focus?.type === "violation") setOpenInfo(`v:${focus.id}`);
+    else if (focus?.type === "max") setOpenInfo("max");
+    else if (focus?.type === "point") {
+      if (focus.idx === 0) setOpenInfo("start");
+      else if (focus.idx === points.length - 1) setOpenInfo("end");
+    }
+  }
 
   const routeKey = useMemo(
     () =>
@@ -296,6 +397,33 @@ export default function RouteHistoryMap({
         : "",
     [points]
   );
+
+  // A new route invalidates any previously inspected point.
+  const [lastRouteKey, setLastRouteKey] = useState(routeKey);
+  if (lastRouteKey !== routeKey) {
+    setLastRouteKey(routeKey);
+    setInspectedIdx(null);
+  }
+
+  /** Closest recorded fix to a clicked map coordinate. */
+  const nearestIdx = (lat: number, lng: number) => {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const d = (points[i].latitude - lat) ** 2 + (points[i].longitude - lng) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  const handleRouteClick = (e: google.maps.PolyMouseEvent) => {
+    if (!e.latLng) return;
+    setInspectedIdx(nearestIdx(e.latLng.lat(), e.latLng.lng()));
+    setOpenInfo("inspected");
+  };
 
   const latlngs = useMemo<LatLng[]>(
     () => points.map((p) => ({ lat: p.latitude, lng: p.longitude })),
@@ -371,6 +499,10 @@ export default function RouteHistoryMap({
     [deviceColor]
   );
 
+  const inspected = inspectedIdx != null ? points[inspectedIdx] : null;
+  const inspectedBattery = inspectedIdx != null ? batteryAt(points, inspectedIdx) : null;
+  const inspectedIdle = inspectedIdx != null ? idleEventAt(idleEvents, inspectedIdx) : null;
+
   const violationPolylines = showViolations ? violations : [];
 
   return (
@@ -406,6 +538,17 @@ export default function RouteHistoryMap({
               />
             ))}
 
+          {/* Wide invisible hit-area so any point on the route is an easy click
+              target — the visible line beneath it is often only a few px wide. */}
+          <Polyline
+            path={latlngs}
+            strokeColor="#000"
+            strokeOpacity={0}
+            strokeWeight={18}
+            onClick={handleRouteClick}
+            zIndex={2}
+          />
+
           {/* Device-color underlay — one unbroken line so the route always reads
               as continuous even where the speed bands change or a stop sits. */}
           <Polyline
@@ -413,6 +556,7 @@ export default function RouteHistoryMap({
             strokeColor={deviceColor}
             strokeWeight={7}
             strokeOpacity={0.35}
+            onClick={handleRouteClick}
           />
 
           {/* Speed-colored route */}
@@ -433,6 +577,7 @@ export default function RouteHistoryMap({
                     repeat: "14px",
                   },
                 ]}
+                onClick={handleRouteClick}
               />
             ) : (
               <Polyline
@@ -441,6 +586,7 @@ export default function RouteHistoryMap({
                 strokeColor={seg.color}
                 strokeWeight={5}
                 strokeOpacity={0.92}
+                onClick={handleRouteClick}
               />
             )
           )}
@@ -638,6 +784,36 @@ export default function RouteHistoryMap({
               );
             })}
 
+          {/* Inspected point — click anywhere on the route to find the nearest
+              recorded fix and see its speed, battery, timestamp and more. */}
+          {inspected && (
+            <>
+              <AdvancedMarker
+                position={{ lat: inspected.latitude, lng: inspected.longitude }}
+                anchorPoint={AdvancedMarkerAnchorPoint.CENTER}
+                zIndex={900}
+                onClick={() => setOpenInfo("inspected")}
+              >
+                <InspectedPointGlyph />
+              </AdvancedMarker>
+              {openInfo === "inspected" && (
+                <InfoWindow
+                  position={{ lat: inspected.latitude, lng: inspected.longitude }}
+                  onCloseClick={() => setOpenInfo(null)}
+                >
+                  <PointDetails
+                    p={inspected}
+                    battery={inspectedBattery}
+                    idle={inspectedIdle}
+                    idleElapsedMs={idleElapsedAt(inspected, inspectedIdle)}
+                    status={statusAt(points, idleEvents, inspectedIdx!)}
+                    distanceKm={distanceUpToKm(points, inspectedIdx!)}
+                  />
+                </InfoWindow>
+              )}
+            </>
+          )}
+
           {/* Playback / live cursor — speed, time and battery on hover */}
           {readoutPoint && (
             <>
@@ -664,6 +840,8 @@ export default function RouteHistoryMap({
                     battery={readoutBattery}
                     idle={cursorIdle}
                     idleElapsedMs={cursorIdleElapsedMs}
+                    status={statusAt(points, idleEvents, readoutIdx)}
+                    distanceKm={distanceUpToKm(points, readoutIdx)}
                   />
                   {cursorIdle ? (
                     <IdleGlyph size={30} />
@@ -686,6 +864,8 @@ export default function RouteHistoryMap({
                     battery={readoutBattery}
                     idle={cursorIdle}
                     idleElapsedMs={cursorIdleElapsedMs}
+                    status={statusAt(points, idleEvents, readoutIdx)}
+                    distanceKm={distanceUpToKm(points, readoutIdx)}
                   />
                 </InfoWindow>
               )}
@@ -697,11 +877,11 @@ export default function RouteHistoryMap({
   );
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+function Row({ k, v, tone }: { k: string; v: string; tone?: string }) {
   return (
     <div className="flex justify-between gap-3 py-0.5">
       <span className="text-slate-500">{k}</span>
-      <span className="font-medium text-slate-800">{v}</span>
+      <span className={`font-medium ${tone ?? "text-slate-800"}`}>{v}</span>
     </div>
   );
 }
@@ -711,11 +891,15 @@ function PointDetails({
   battery = null,
   idle = null,
   idleElapsedMs = 0,
+  status,
+  distanceKm,
 }: {
   p: LocationPoint;
   battery?: number | null;
   idle?: IdleEvent | null;
   idleElapsedMs?: number;
+  status: PointStatus;
+  distanceKm: number;
 }) {
   const level = p.batteryPercent ?? battery;
   return (
@@ -726,8 +910,10 @@ function PointDetails({
           <span className="ml-1 text-[10px] font-semibold uppercase text-rose-600">mock</span>
         )}
       </p>
+      <Row k="Status" v={STATUS_LABEL[status]} tone={STATUS_TONE_LIGHT[status]} />
       <Row k="Time" v={fmtTime(p.recordedAt)} />
       <Row k="Speed" v={`${speedKmh(p).toFixed(1)} km/h`} />
+      <Row k="Distance" v={`${distanceKm.toFixed(2)} km`} />
       {level != null && <Row k="Battery" v={`${level}%`} />}
       {idle && (
         <Row
@@ -737,7 +923,7 @@ function PointDetails({
       )}
       {p.accuracyMeters != null && <Row k="Accuracy" v={`±${p.accuracyMeters.toFixed(0)} m`} />}
       {p.bearingDegrees != null && <Row k="Bearing" v={`${p.bearingDegrees.toFixed(0)}°`} />}
-      <Row k="Coords" v={`${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`} />
+      <Row k="Location" v={`${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`} />
     </div>
   );
 }
