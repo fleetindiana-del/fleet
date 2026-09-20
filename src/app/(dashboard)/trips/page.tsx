@@ -15,8 +15,6 @@ import {
   Flag,
   Menu,
   ChevronDown,
-  ChevronUp,
-  Minus,
   AlertTriangle,
   Zap,
   PauseCircle,
@@ -612,8 +610,8 @@ export default function RouteHistoryPage() {
       />
 
       {isLoading && (
-        <div className="absolute inset-0 z-[500] flex items-center justify-center bg-black/10">
-          <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-lg">
+        <div className="animate-in fade-in absolute inset-0 z-500 flex items-center justify-center bg-slate-900/10 backdrop-blur-[2px] duration-200">
+          <div className="animate-in zoom-in-95 slide-in-from-bottom-2 flex items-center gap-2.5 rounded-full border border-white/60 bg-white/95 px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-[0_8px_30px_-6px_rgba(15,23,42,0.35)] duration-300">
             <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
             Loading route…
           </div>
@@ -680,12 +678,12 @@ export default function RouteHistoryPage() {
               step={5}
               value={speedLimitKmh}
               onChange={(e) => persistSpeedLimit(Number(e.target.value) || 60)}
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm text-slate-800 outline-none focus:border-indigo-400"
+              className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50/80 px-2.5 text-sm text-slate-800 outline-none transition-all duration-200 focus:border-indigo-400 focus:bg-white focus:shadow-[0_0_0_4px_rgba(99,102,241,0.12)]"
             />
           </label>
 
           {filtersStale && !formError && (
-            <p className="mt-2 flex items-center gap-1 text-xs font-medium text-amber-600">
+            <p className="animate-in fade-in slide-in-from-top-1 mt-2 flex items-center gap-1 text-xs font-medium text-amber-600 duration-200">
               <AlertTriangle className="h-3 w-3 shrink-0" />
               Filters changed — the route below is for the previous selection.
             </p>
@@ -695,16 +693,28 @@ export default function RouteHistoryPage() {
             type="button"
             onClick={viewRoute}
             disabled={isLoading}
-            className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-full text-sm font-semibold text-white shadow hover:brightness-110 disabled:opacity-60 ${
+            className={`group relative mt-3 flex h-10.5 w-full items-center justify-center gap-2 overflow-hidden rounded-full text-sm font-semibold text-white shadow-[0_6px_18px_-4px_var(--tw-shadow-color)] transition-all duration-200 hover:shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100 ${
               filtersStale ? "ring-2 ring-amber-400 ring-offset-2" : ""
             }`}
-            style={{ background: accent }}
+            style={{ background: accent, ["--tw-shadow-color" as string]: `${accent}55` }}
           >
-            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+            <span
+              aria-hidden
+              className="absolute inset-0 -translate-x-full bg-linear-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-full"
+            />
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Route className="h-4 w-4 transition-transform duration-200 group-hover:scale-110" />
+            )}
             View route
           </button>
 
-          {formError && <p className="mt-2 text-xs text-rose-600">{formError}</p>}
+          {formError && (
+            <p className="animate-in fade-in slide-in-from-top-1 mt-2 text-xs text-rose-600 duration-200">
+              {formError}
+            </p>
+          )}
         </CollapsiblePanel>
 
         {/* Stats panel */}
@@ -833,12 +843,12 @@ export default function RouteHistoryPage() {
                   key={key}
                   type="button"
                   onClick={() => setEventFilter(key)}
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                  style={eventFilter === key ? { background: accent, boxShadow: `0 4px 12px -3px ${accent}80` } : undefined}
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-all duration-200 ${
                     eventFilter === key
-                      ? "text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      ? "scale-105 text-white"
+                      : "bg-slate-100 text-slate-600 hover:-translate-y-0.5 hover:bg-slate-200 active:scale-95"
                   }`}
-                  style={eventFilter === key ? { background: accent } : undefined}
                 >
                   {key === "all" && <Filter className="h-3 w-3" />}
                   {label}
@@ -850,7 +860,7 @@ export default function RouteHistoryPage() {
               {timeline.length === 0 ? (
                 <p className="py-4 text-center text-xs text-slate-400">No events for this filter</p>
               ) : (
-                timeline.map((it) => {
+                timeline.map((it, i) => {
                   const selected =
                     (it.kind === "start" && mapSelection?.kind === "start") ||
                     (it.kind === "end" && mapSelection?.kind === "end") ||
@@ -870,7 +880,8 @@ export default function RouteHistoryPage() {
                       }
                       setFocus(it.focus);
                     }}
-                    className={`flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50 ${
+                    style={{ animationDelay: `${Math.min(i, 20) * 20}ms` }}
+                    className={`animate-in fade-in slide-in-from-left-1 flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left transition-all duration-200 fill-mode-both hover:translate-x-0.5 hover:bg-slate-50 ${
                       selected ? "bg-indigo-50 ring-1 ring-indigo-200" : ""
                     }`}
                   >
@@ -906,16 +917,16 @@ export default function RouteHistoryPage() {
                   setSelectedSubTrip(null);
                   setFocus({ type: "bounds" });
                 }}
-                className={`w-full rounded-xl px-3 py-2 text-left text-xs ${
+                style={selectedSubTrip === null ? { background: accent, boxShadow: `0 4px 14px -4px ${accent}80` } : undefined}
+                className={`w-full rounded-xl px-3 py-2 text-left text-xs transition-all duration-200 ${
                   selectedSubTrip === null
                     ? "font-semibold text-white"
-                    : "text-slate-600 hover:bg-slate-50"
+                    : "text-slate-600 hover:translate-x-0.5 hover:bg-slate-50"
                 }`}
-                style={selectedSubTrip === null ? { background: accent } : undefined}
               >
                 All trips · {points.length} pts
               </button>
-              {sessions.map((s) => {
+              {sessions.map((s, i) => {
                 const sPts = points.filter((p) => p.sessionId === s.sessionId).length;
                 const active = selectedSubTrip === s.sessionId;
                 return (
@@ -926,10 +937,15 @@ export default function RouteHistoryPage() {
                       setSelectedSubTrip(s.sessionId);
                       setFocus({ type: "bounds" });
                     }}
-                    className={`w-full rounded-xl border px-3 py-2 text-left transition-colors ${
-                      active ? "border-transparent text-white" : "border-transparent hover:bg-slate-50"
+                    style={{
+                      animationDelay: `${Math.min(i, 20) * 25}ms`,
+                      ...(active ? { background: accent, boxShadow: `0 4px 14px -4px ${accent}80` } : undefined),
+                    }}
+                    className={`animate-in fade-in slide-in-from-right-1 w-full rounded-xl border px-3 py-2 text-left transition-all duration-200 fill-mode-both ${
+                      active
+                        ? "scale-[1.02] border-transparent text-white"
+                        : "border-transparent hover:translate-x-0.5 hover:bg-slate-50"
                     }`}
-                    style={active ? { background: accent } : undefined}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className={`truncate text-xs font-medium ${active ? "text-white" : "text-slate-900"}`}>
@@ -962,17 +978,23 @@ export default function RouteHistoryPage() {
 
       {/* ─── Map legend (bottom-left) ─── */}
       {hasRoute && (
-        <div className="absolute bottom-20 left-3 z-[1100] max-h-[min(60vh,26rem)] overflow-y-auto sm:bottom-24 sm:left-4">
-          <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.16)]">
+        <div className="animate-in fade-in slide-in-from-left-2 absolute bottom-20 left-3 z-[1100] max-h-[min(60vh,26rem)] overflow-y-auto duration-300 sm:bottom-24 sm:left-4">
+          <div className="overflow-hidden rounded-2xl border border-white/60 bg-white/90 shadow-[0_8px_28px_-8px_rgba(15,23,42,0.22)] backdrop-blur-xl">
             <button
               type="button"
               onClick={() => setLegendOpen((v) => !v)}
-              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
             >
               <span>Map legend</span>
-              {legendOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-300 ${legendOpen ? "" : "-rotate-180"}`}
+              />
             </button>
-            {legendOpen && (
+            <div
+              className="grid transition-[grid-template-rows] duration-300 ease-out"
+              style={{ gridTemplateRows: legendOpen ? "1fr" : "0fr" }}
+            >
+              <div className="overflow-hidden">
               <div className="space-y-3 border-t border-slate-100 px-3 py-2">
                 {/* States — matches the marker glyphs plotted on the route */}
                 <div className="space-y-1.5">
@@ -1002,23 +1024,33 @@ export default function RouteHistoryPage() {
                   ))}
                 </div>
               </div>
-            )}
+              </div>
+            </div>
           </div>
         </div>
       )}
 
       {/* ─── Playback bar ─── */}
       {hasRoute && displayedPoints.length > 1 && (
-        <div className="absolute bottom-3 left-1/2 z-[1100] w-[min(720px,calc(100%-1.5rem))] -translate-x-1/2 sm:bottom-4">
-          <div className="flex items-center gap-3 rounded-full bg-white px-3 py-2 shadow-[0_2px_12px_rgba(0,0,0,0.2)]">
+        <div className="animate-in fade-in slide-in-from-bottom-2 absolute bottom-3 left-1/2 z-[1100] w-[min(720px,calc(100%-1.5rem))] -translate-x-1/2 duration-300 sm:bottom-4">
+          <div className="flex items-center gap-3 rounded-full border border-white/60 bg-white/90 px-3 py-2 shadow-[0_10px_32px_-8px_rgba(15,23,42,0.3)] backdrop-blur-xl">
             <button
               type="button"
               onClick={togglePlay}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white hover:brightness-110"
-              style={{ background: accent }}
+              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-transform duration-200 hover:scale-110 hover:brightness-110 active:scale-95"
+              style={{ background: accent, boxShadow: `0 4px 14px -3px ${accent}99` }}
               aria-label={isPlaying ? "Pause" : "Play"}
             >
-              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {isPlaying && (
+                <span
+                  aria-hidden
+                  className="absolute inset-0 animate-ping rounded-full opacity-40"
+                  style={{ background: accent }}
+                />
+              )}
+              <span className="relative">
+                {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-0.5" />}
+              </span>
             </button>
             <span className="w-16 shrink-0 font-mono text-xs tabular-nums text-slate-600">
               {playbackTime}
@@ -1090,10 +1122,12 @@ export default function RouteHistoryPage() {
                   key={sp}
                   type="button"
                   onClick={() => setSpeed(sp)}
-                  className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                    speed === sp ? "text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  className={`rounded-full px-2 py-1 text-xs font-semibold transition-all duration-200 ${
+                    speed === sp
+                      ? "scale-110 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95"
                   }`}
-                  style={speed === sp ? { background: accent } : undefined}
+                  style={speed === sp ? { background: accent, boxShadow: `0 3px 10px -2px ${accent}80` } : undefined}
                 >
                   {sp}×
                 </button>
@@ -1104,8 +1138,8 @@ export default function RouteHistoryPage() {
       )}
 
       {!isLoading && hasQueried && !hasRoute && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-[1000] flex justify-center px-4">
-          <div className="rounded-2xl bg-white px-4 py-3 text-center shadow-lg">
+        <div className="animate-in fade-in zoom-in-95 pointer-events-none absolute inset-x-0 bottom-16 z-[1000] flex justify-center px-4 duration-300">
+          <div className="rounded-2xl border border-white/60 bg-white/95 px-4 py-3 text-center shadow-[0_8px_28px_-8px_rgba(15,23,42,0.3)] backdrop-blur-xl">
             <p className="text-sm font-medium text-slate-800">No GPS points in this interval</p>
             <p className="mt-0.5 text-xs text-slate-500">Try another device, day, or time range.</p>
           </div>
@@ -1113,8 +1147,8 @@ export default function RouteHistoryPage() {
       )}
 
       {!isLoading && !hasQueried && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-8 z-[1000] flex justify-center px-4">
-          <div className="rounded-full bg-white/95 px-4 py-2 text-xs font-medium text-slate-600 shadow">
+        <div className="animate-in fade-in slide-in-from-bottom-2 pointer-events-none absolute inset-x-0 bottom-8 z-[1000] flex justify-center px-4 duration-500">
+          <div className="rounded-full border border-white/60 bg-white/95 px-4 py-2 text-xs font-medium text-slate-600 shadow-lg backdrop-blur-xl">
             Search by name, set the interval, then View route
           </div>
         </div>
@@ -1143,18 +1177,27 @@ function CollapsiblePanel({
   leading?: ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.16)]">
-      <div className="flex items-center gap-2 px-3 py-2">
+    <div className="animate-in fade-in slide-in-from-left-2 overflow-hidden rounded-3xl border border-white/60 bg-white/90 shadow-[0_8px_28px_-8px_rgba(15,23,42,0.22)] backdrop-blur-xl duration-300 fill-mode-both">
+      {accent && (
+        <div
+          className="h-0.75 w-full opacity-90"
+          style={{ background: `linear-gradient(90deg, ${accent}, color-mix(in srgb, ${accent} 40%, transparent))` }}
+        />
+      )}
+      <div className="flex items-center gap-2 px-3.5 py-2.5">
         {leading}
         {accent && (
-          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: accent }} />
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full ring-4"
+            style={{ background: accent, ["--tw-ring-color" as string]: `${accent}26` }}
+          />
         )}
         <button
           type="button"
           onClick={onToggle}
           className="min-w-0 flex-1 text-left"
         >
-          <p className="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <p className="truncate text-xs font-bold uppercase tracking-wide text-slate-600">
             {title}
           </p>
           {subtitle && (
@@ -1166,15 +1209,24 @@ function CollapsiblePanel({
           <button
             type="button"
             onClick={onToggle}
-            className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-full p-1.5 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-700 active:scale-90"
             aria-label={minimized ? "Expand" : "Minimize"}
             title={minimized ? "Expand" : "Minimize"}
           >
-            {minimized ? <ChevronDown className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ${minimized ? "" : "-rotate-180"}`}
+            />
           </button>
         </div>
       </div>
-      {!minimized && <div className="border-t border-slate-100 p-3">{children}</div>}
+      <div
+        className="grid transition-[grid-template-rows] duration-300 ease-out"
+        style={{ gridTemplateRows: minimized ? "0fr" : "1fr" }}
+      >
+        <div className="overflow-hidden">
+          <div className="border-t border-slate-100 p-3">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1191,9 +1243,12 @@ function Stat({
   hint?: string;
 }) {
   return (
-    <div className="rounded-xl bg-slate-50 px-2.5 py-2" title={hint}>
+    <div
+      className="group rounded-xl bg-slate-50 px-2.5 py-2 transition-all duration-200 hover:-translate-y-0.5 hover:bg-slate-100 hover:shadow-sm"
+      title={hint}
+    >
       <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-        {icon}
+        <span className="transition-transform duration-200 group-hover:scale-110">{icon}</span>
         {label}
       </p>
       <p className="mt-0.5 text-sm font-semibold text-slate-900">{value}</p>
@@ -1215,7 +1270,7 @@ function IconBtn({
       type="button"
       title={title}
       onClick={onClick}
-      className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+      className="rounded-full p-1.5 text-slate-500 transition-all duration-200 hover:bg-slate-100 hover:text-slate-800 active:scale-90"
     >
       {children}
     </button>
@@ -1225,9 +1280,9 @@ function IconBtn({
 /** One row in the Map legend's States section — mirrors a marker's PinGlyph. */
 function LegendRow({ color, glyph, label }: { color: string; glyph: string; label: string }) {
   return (
-    <div className="flex items-center gap-2 text-[11px] text-slate-600">
+    <div className="group flex items-center gap-2 text-[11px] text-slate-600">
       <span
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white shadow-sm transition-transform duration-200 group-hover:scale-125"
         style={{ background: color }}
       >
         {glyph}
@@ -1261,8 +1316,9 @@ function IdleStopRow({
       type="button"
       data-idle-id={event.id}
       onClick={onClick}
-      className={`w-full rounded-xl px-3 py-2 text-left hover:bg-slate-100 ${
-        active ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-50"
+      style={{ animationDelay: `${Math.min(index - 1, 20) * 20}ms` }}
+      className={`animate-in fade-in slide-in-from-left-1 w-full rounded-xl px-3 py-2 text-left transition-all duration-200 fill-mode-both hover:-translate-y-0.5 hover:shadow-sm ${
+        active ? "bg-indigo-50 ring-1 ring-indigo-200" : "bg-slate-50 hover:bg-slate-100"
       }`}
     >
       <div className="flex items-center justify-between gap-2">

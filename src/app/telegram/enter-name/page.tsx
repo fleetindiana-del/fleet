@@ -16,6 +16,11 @@ function EnterNameForm() {
     const script = document.createElement("script");
     script.src = "https://telegram.org/js/telegram-web-app.js";
     script.async = true;
+    script.onload = () => {
+      const tg = (window as unknown as { Telegram?: { WebApp?: { ready?: () => void; expand?: () => void } } }).Telegram?.WebApp;
+      tg?.ready?.();
+      tg?.expand?.();
+    };
     document.body.appendChild(script);
     return () => {
       document.body.removeChild(script);
@@ -42,9 +47,10 @@ function EnterNameForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contactName,
-          phoneNumber: decodeURIComponent(p),
-          employeeName: decodeURIComponent(e),
-          chatId: decodeURIComponent(c),
+          phoneNumber: p,
+          employeeName: e,
+          chatId: c,
+          initData: (window as any).Telegram?.WebApp?.initData || "",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -71,7 +77,7 @@ function EnterNameForm() {
         </p>
         {p && (
           <p className="text-sm font-medium mb-4 text-[var(--tg-theme-link-color,#2481cc)]">
-            Number: {decodeURIComponent(p)}
+            Number: {p}
           </p>
         )}
         {!p && <div className="mb-4" />}

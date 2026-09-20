@@ -3,7 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import IdentifiedContact from "@/models/IdentifiedContact";
+import EmployeeTelegram from "@/models/EmployeeTelegram";
 import { sendInlineKeyboard, saveContactKeyboard } from "@/lib/telegram";
+import { escapeHtml, escapeRegex } from "@/lib/telegramFormat";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -19,11 +21,24 @@ export async function POST(req: Request) {
   const contact = await IdentifiedContact.findById(id);
   if (!contact) return NextResponse.json({ error: "Contact not found" }, { status: 404 });
 
-  if (!contact.telegramChatId) {
+  let chatId = contact.telegramChatId;
+  if (!chatId) {
+    const emp = await EmployeeTelegram.findOne({
+      employeeName: new RegExp(`^${escapeRegex(contact.employeeName)}$`, "i"),
+    }).lean() as { telegramChatId?: string } | null;
+    chatId = emp?.telegramChatId || undefined;
+  }
+
+  if (!chatId) {
     return NextResponse.json(
       { error: "No Telegram chat ID for this employee" },
       { status: 422 }
     );
+  }
+
+  const keyboard = saveContactKeyboard(contact.phoneNumber, contact.employeeName);
+  if (!keyboard) {
+    return NextResponse.json({ error: "Could not build Telegram keyboard" }, { status: 500 });
   }
 
   const displayName =
@@ -31,20 +46,23 @@ export async function POST(req: Request) {
       ? contact.contactName
       : null;
   const detailLine = displayName
-    ? `Name: <b>${displayName}</b>\nNumber: <code>${contact.phoneNumber}</code>`
-    : `Number: <code>${contact.phoneNumber}</code>`;
+    ? `Name: <b>${escapeHtml(displayName)}</b>\nNumber: <code>${escapeHtml(contact.phoneNumber)}</code>`
+    : `Number: <code>${escapeHtml(contact.phoneNumber)}</code>`;
   const text =
     `Confirm once you've saved this contact in your phone?\n\n` +
     detailLine;
 
-  await sendInlineKeyboard(
-    contact.telegramChatId,
-    text,
-    saveContactKeyboard(contact.phoneNumber, contact.employeeName)
-  );
+  const sent = await sendInlineKeyboard(chatId, text, keyboard);
+  if (!sent?.ok) {
+    return NextResponse.json(
+      { error: "Telegram did not accept the reminder" },
+      { status: 502 }
+    );
+  }
 
-  // Reset remind_later so the reminder can fire again
+  contact.telegramChatId = String(chatId);
   contact.remindLater = false;
+  contact.lastReminderSentAt = new Date();
   await contact.save();
 
   return NextResponse.json({ success: true });

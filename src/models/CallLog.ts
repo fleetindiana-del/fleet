@@ -10,6 +10,8 @@ export interface ICallLog extends Document {
   companyId: mongoose.Types.ObjectId;
   employeeName?: string;
   contactName?: string;
+  /** Set when contact intelligence has claimed this row, so overlapping processors cannot count it twice. */
+  intelligenceClaimedAt?: Date;
 }
 
 const CallLogSchema = new Schema(
@@ -23,11 +25,13 @@ const CallLogSchema = new Schema(
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
     employeeName: { type: String },
     contactName: { type: String },
+    intelligenceClaimedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
 // Compound index to prevent duplicates
 CallLogSchema.index({ phoneNumber: 1, timestamp: 1, duration: 1 }, { unique: true });
+CallLogSchema.index({ employeeName: 1, intelligenceClaimedAt: 1 });
 
 export default mongoose.models.CallLog || mongoose.model<ICallLog>('CallLog', CallLogSchema);

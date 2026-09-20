@@ -17,10 +17,31 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Run the intelligence pipeline for this specific contact
-    await runContactIntelligence(phoneNumber, contactName, employeeName, deviceId || "");
+    const knownName =
+      contactName && contactName !== "Unknown" && contactName !== "" ? contactName : undefined;
 
-    return NextResponse.json({ success: true, message: "Intelligence triggered successfully" });
+    // Do not count this as another call. Scenario B manual send may raise a
+    // stuck tracker up to the threshold once so the prompt can go out.
+    const outcome = await runContactIntelligence(
+      phoneNumber,
+      knownName,
+      employeeName,
+      deviceId || "",
+      { countAsNewCall: false, ensureAtThreshold: !knownName }
+    );
+
+    if (!outcome.ok) {
+      return NextResponse.json(
+        { success: false, error: outcome.message, step: outcome.step },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: outcome.message,
+      step: outcome.step,
+    });
   } catch (error: any) {
     console.error("Manual send error:", error);
     return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
 import BotLog from "@/models/BotLog";
-import { runContactIntelligence } from "@/lib/contactIntelligence";
+import { runContactIntelligence, retryUnsentPrompts } from "@/lib/contactIntelligence";
 import mongoose from "mongoose";
 
 function normalizeCallType(raw: unknown): string {
@@ -79,6 +79,7 @@ export async function POST(req: Request) {
     // we MUST await the contact intelligence process completely.
     try {
       await runContactIntelligence(phoneNumber, resolvedContact, resolvedEmployee, deviceId || "");
+      await retryUnsentPrompts(resolvedEmployee);
     } catch (err: any) {
       console.error("[Intelligence] Uncaught error:", err);
       await BotLog.create({

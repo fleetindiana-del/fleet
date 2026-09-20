@@ -157,7 +157,7 @@ export default function ContactIntelligencePage() {
       });
       const result = await res.json();
       if (result.success) {
-        setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: "✅ Sent successfully!" } }));
+        setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: result.message || "✅ Sent successfully!" } }));
       } else {
         setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: "❌ Error: " + result.error, error: true } }));
       }

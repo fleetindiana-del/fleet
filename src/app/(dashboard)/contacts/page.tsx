@@ -5,8 +5,9 @@ import connectToDatabase from "@/lib/db";
 import Contact from "@/models/Contact";
 import MergedContact from "@/models/MergedContact";
 import { runContactMerge } from "@/lib/contactMerge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Contact as ContactIcon, Users } from "lucide-react";
 import { ContactsTableClient, type MergedContactRow } from "./ContactsTableClient";
+import { AnimatedNumber } from "./AnimatedNumber";
 
 type MergedContactLean = {
   _id: unknown;
@@ -65,24 +66,36 @@ export default async function ContactsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight text-white">Contact Bank</h1>
+      <div className="animate-in fade-in slide-in-from-bottom-1 flex items-center gap-3 duration-300">
+        <span className="relative flex h-11 w-11 shrink-0 items-center justify-center">
+          <span
+            aria-hidden
+            className="animate-breathe absolute inset-0 rounded-2xl bg-linear-to-br from-indigo-500 to-violet-600 blur-md"
+          />
+          <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-linear-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25">
+            <ContactIcon className="h-5 w-5" />
+          </span>
+        </span>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-white">Contact Bank</h1>
+          <p className="flex items-center gap-1.5 text-sm text-slate-400">
+            <Users className="h-3.5 w-3.5" />
+            <AnimatedNumber value={rows.length} className="tabular-nums" /> unified contact
+            {rows.length === 1 ? "" : "s"} synced from every employee device
+          </p>
+        </div>
       </div>
 
-      <Card className="bg-slate-900 border-slate-800">
-        <CardHeader>
-          <CardTitle className="text-lg text-slate-200">Synced Contacts</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {rawCount === 0 ? (
-            <div className="rounded-md border border-slate-800 bg-slate-900 px-4 py-10 text-center text-slate-500 text-sm">
-              No contacts found. Have employees turn ON call monitoring to sync contacts.
-            </div>
-          ) : (
-            <ContactsTableClient contacts={rows} rawCount={rawCount} />
-          )}
-        </CardContent>
-      </Card>
+      {rawCount === 0 ? (
+        <div className="animate-in fade-in zoom-in-95 rounded-2xl border border-dashed border-slate-800 bg-slate-900/60 px-4 py-14 text-center duration-300">
+          <ContactIcon className="mx-auto h-8 w-8 text-slate-700" />
+          <p className="mt-3 text-sm text-slate-400">
+            No contacts found. Have employees turn ON call monitoring to sync contacts.
+          </p>
+        </div>
+      ) : (
+        <ContactsTableClient contacts={rows} rawCount={rawCount} />
+      )}
     </div>
   );
 }

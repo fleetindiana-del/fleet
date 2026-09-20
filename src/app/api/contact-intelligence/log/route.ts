@@ -7,6 +7,7 @@ import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
 import IntelligenceCheckpoint from "@/models/IntelligenceCheckpoint";
+import { phoneKeyOf } from "@/lib/contactNormalize";
 
 /**
  * GET /api/contact-intelligence/log
@@ -36,7 +37,8 @@ export async function GET(req: Request) {
 
   const matchStage: any = { createdAt: { $gt: since } };
   if (employeeFilter && employeeFilter !== "ALL") {
-    matchStage.employeeName = employeeFilter;
+    const escaped = employeeFilter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    matchStage.employeeName = { $regex: `^${escaped}$`, $options: "i" };
   }
 
   const aggregated = await CallLog.aggregate([
@@ -71,54 +73,57 @@ export async function GET(req: Request) {
     return NextResponse.json({ logs: [], employees: [] });
   }
 
+  const collapsed = collapseCallRows(aggregated);
+
   // ── 2. Fetch all related records in bulk ──────────────────────────────────
-  const allPhones = aggregated.map((r) => r._id.phoneNumber);
-  const allEmployees = [...new Set(aggregated.map((r) => r._id.employeeName))];
+  const allPhones = collapsed.map((r) => r._id.phoneNumber);
+  const allEmployees = [...new Set(collapsed.map((r) => r._id.employeeName))];
+  const phoneKeys = [...new Set(collapsed.map((r) => phoneKeyOf(r._id.phoneNumber)).filter((key) => key.length >= 6))];
+  const phoneMatch = {
+    $or: [
+      { phoneNumber: { $in: allPhones } },
+      { phoneKey: { $in: phoneKeys } },
+    ],
+  };
 
   const [identifiedContacts, unknownTrackers, telegramEmployees] = await Promise.all([
-    IdentifiedContact.find({
-      phoneNumber: { $in: allPhones },
-    }).lean(),
-    UnknownNumberTracker.find({
-      phoneNumber: { $in: allPhones },
-    }).lean(),
-    EmployeeTelegram.find({
-      employeeName: { $in: allEmployees },
-    }).lean(),
+    IdentifiedContact.find(phoneMatch).lean(),
+    UnknownNumberTracker.find(phoneMatch).lean(),
+    EmployeeTelegram.find().select("employeeName telegramChatId").lean(),
   ]);
 
-  // Build lookup maps
+  const pairKey = (phone: string, employee: string, phoneKey?: string) =>
+    `${phoneKey || phoneKeyOf(phone) || String(phone || "").toLowerCase()}|${String(employee || "").toLowerCase()}`;
+
+  // Build lookup maps. Keys ignore capitalisation so "DIPAK muliya" and "Dipak Muliya" are one person.
   const identifiedMap = new Map<string, any>();
   for (const ic of identifiedContacts) {
-    identifiedMap.set(`${ic.phoneNumber}|${ic.employeeName}`, ic);
+    identifiedMap.set(pairKey(ic.phoneNumber, ic.employeeName, ic.phoneKey), ic);
   }
 
   const trackerMap = new Map<string, any>();
   for (const t of unknownTrackers) {
-    trackerMap.set(`${t.phoneNumber}|${t.employeeName}`, t);
+    trackerMap.set(pairKey(t.phoneNumber, t.employeeName, t.phoneKey), t);
   }
 
   const telegramMap = new Map<string, boolean>();
   for (const te of telegramEmployees as any[]) {
-    telegramMap.set(te.employeeName, !!te.telegramChatId);
+    telegramMap.set(String(te.employeeName || "").toLowerCase(), !!te.telegramChatId);
   }
 
   // ── 3. Build the log entries ──────────────────────────────────────────────
-  const logs = aggregated.map((agg) => {
+  const logs = collapsed.map((agg) => {
     const phoneNumber: string = agg._id.phoneNumber;
     const employeeName: string = agg._id.employeeName;
-    const key = `${phoneNumber}|${employeeName}`;
+    const key = pairKey(phoneNumber, employeeName);
+    const hasTelegram = telegramMap.get(employeeName.toLowerCase()) ?? false;
 
-    // Determine the "best" contact name from phone contacts
-    // If any entry has a non-Unknown name, the number is saved in phone contacts
     const knownName = agg.contactNames.find(
       (n: string) => n && n !== "Unknown" && n !== ""
     );
     const isInPhoneContacts = !!knownName;
-
     const identified = identifiedMap.get(key);
     const tracker = trackerMap.get(key);
-    const hasTelegram = telegramMap.get(employeeName) ?? false;
 
     // ── Determine status ─────────────────────────────────────────────────
     let scenario: "A" | "B";
@@ -135,9 +140,14 @@ export async function GET(req: Request) {
         status = "done";
         actionNeeded = "None — fully classified ✅";
       } else if (identified && !identified.category) {
-        status = "awaiting_category";
-        actionNeeded = "Awaiting category selection from employee";
-        messageSent = true;
+        const promptSent = !!identified.categoryRequestSentAt;
+        status = promptSent ? "awaiting_category" : "needs_category";
+        actionNeeded = promptSent
+          ? "Awaiting category selection from employee"
+          : hasTelegram
+            ? "Telegram message should be sent asking for category"
+            : "⚠️ No Telegram linked — cannot send";
+        messageSent = promptSent;
       } else {
         status = "needs_category";
         actionNeeded = hasTelegram
@@ -151,9 +161,18 @@ export async function GET(req: Request) {
         status = "done";
         actionNeeded = "None — fully identified and classified ✅";
       } else if (identified?.contactName && !identified?.category) {
-        status = "awaiting_category";
-        actionNeeded = "Name received — awaiting category selection";
-        messageSent = true;
+        const promptSent = !!identified.categoryRequestSentAt;
+        if (promptSent) {
+          status = "awaiting_category";
+          actionNeeded = "Name received — awaiting category selection";
+          messageSent = true;
+        } else {
+          status = "needs_category";
+          actionNeeded = hasTelegram
+            ? "Name saved — category Telegram not sent yet (will retry)"
+            : "⚠️ Name saved but no Telegram linked — cannot send category";
+          messageSent = false;
+        }
       } else if (tracker?.status === "awaiting_name") {
         status = "awaiting_name";
         const messageActuallySent = !!(tracker as any)?.telegramMessageId;
@@ -196,4 +215,34 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({ logs, employees: allEmployees.sort() });
+}
+
+function collapseCallRows(rows: any[]) {
+  const merged = new Map<string, any>();
+  for (const agg of rows) {
+    const phoneNumber = String(agg._id?.phoneNumber || "");
+    const employeeName = String(agg._id?.employeeName || "");
+    const key = `${phoneKeyOf(phoneNumber) || phoneNumber.toLowerCase()}|${employeeName.toLowerCase()}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, {
+        ...agg,
+        _id: { phoneNumber, employeeName },
+        contactNames: [...(agg.contactNames || [])],
+      });
+      continue;
+    }
+    existing.callCount += agg.callCount || 0;
+    existing.totalDuration = (existing.totalDuration || 0) + (agg.totalDuration || 0);
+    existing.incomingCount = (existing.incomingCount || 0) + (agg.incomingCount || 0);
+    existing.outgoingCount = (existing.outgoingCount || 0) + (agg.outgoingCount || 0);
+    existing.missedCount = (existing.missedCount || 0) + (agg.missedCount || 0);
+    existing.contactNames = [...new Set([...(existing.contactNames || []), ...(agg.contactNames || [])])];
+    if (!existing.lastCall || (agg.lastCall && agg.lastCall > existing.lastCall)) existing.lastCall = agg.lastCall;
+    if (!existing.firstCall || (agg.firstCall && agg.firstCall < existing.firstCall)) existing.firstCall = agg.firstCall;
+    if (phoneKeyOf(phoneNumber).length >= 6 && phoneKeyOf(existing._id.phoneNumber).length < 6) {
+      existing._id.phoneNumber = phoneNumber;
+    }
+  }
+  return [...merged.values()];
 }

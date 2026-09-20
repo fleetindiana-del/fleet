@@ -5,6 +5,11 @@
 
 import connectToDatabase from '@/lib/db';
 import BotLog from '@/models/BotLog';
+import {
+  categoryCallbackData,
+  remindCallbackData,
+  savedCallbackData,
+} from '@/lib/telegramFormat';
 
 export type InlineButton = { text: string; callback_data: string };
 export type WebAppButton = { text: string; web_app: { url: string } };
@@ -104,13 +109,15 @@ export async function answerCallbackQuery(
 export async function editMessageText(
   chatId: string | number,
   messageId: number,
-  text: string
+  text: string,
+  removeKeyboard = true
 ): Promise<any> {
   return callTelegram('editMessageText', {
     chat_id: chatId,
     message_id: messageId,
     text,
     parse_mode: 'HTML',
+    ...(removeKeyboard ? { reply_markup: { inline_keyboard: [] } } : {}),
   });
 }
 
@@ -123,42 +130,52 @@ export async function setWebhook(url: string, secretToken?: string): Promise<any
   });
 }
 
-/** The standard category inline keyboard used in multiple messages. */
-export function categoryKeyboard(phoneNumber: string, employeeName: string): InlineKeyboard {
-  const encode = (cat: string) =>
-    `cat:${encodeURIComponent(phoneNumber)}:${encodeURIComponent(employeeName)}:${encodeURIComponent(cat)}`;
-  return [
-    [
-      { text: '👨‍👩‍👧 personal', callback_data: encode('personal') },
-      { text: '🤝 staff', callback_data: encode('staff') },
-    ],
-    [
-      { text: '✅ Existing Client', callback_data: encode('Existing Client') },
-      { text: '🆕 New Client', callback_data: encode('New Client') },
-    ],
-    [{ text: '🔖 courier', callback_data: encode('courier') }],
-  ];
+/**
+ * Category keyboard.
+ * The employee name is included when the payload fits Telegram's 64-byte limit.
+ * Longer names omit it; the webhook then uses the chat the message was sent to.
+ * Returns null if a button payload would still be rejected.
+ */
+export function categoryKeyboard(phoneNumber: string, employeeName: string): InlineKeyboard | null {
+  const row = (label: string, category: string) => {
+    const data = categoryCallbackData(phoneNumber, employeeName, category);
+    return data ? { text: label, callback_data: data } : null;
+  };
+  const personal = row('👨‍👩‍👧 personal', 'personal');
+  const staff = row('🤝 staff', 'staff');
+  const existing = row('✅ Existing Client', 'Existing Client');
+  const fresh = row('🆕 New Client', 'New Client');
+  const courier = row('🔖 courier', 'courier');
+  if (!personal || !staff || !existing || !fresh || !courier) return null;
+  return [[personal, staff], [existing, fresh], [courier]];
+}
+
+/** HTTPS origin Telegram will accept for the Scenario B web app button. */
+export function telegramPublicBaseUrl(): string {
+  const explicit = (process.env.TELEGRAM_WEBAPP_URL || '').replace(/\/$/, '');
+  if (explicit.startsWith('https://')) return explicit;
+  const nextAuth = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+  if (nextAuth.startsWith('https://')) return nextAuth;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL.replace(/\/$/, '')}`;
+  return 'https://fleet-navy.vercel.app';
 }
 
 /** Scenario B: "Enter name" button that opens a Web App form (input inside the flow). */
 export function nameRequestKeyboard(phoneNumber: string, employeeName: string, chatId: string | number): InlineKeyboard {
-  const baseUrl = process.env.NEXTAUTH_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') || 'https://fleet-navy.vercel.app';
+  const baseUrl = telegramPublicBaseUrl();
   const url = `${baseUrl}/telegram/enter-name?p=${encodeURIComponent(phoneNumber)}&e=${encodeURIComponent(employeeName)}&c=${encodeURIComponent(String(chatId))}`;
   return [[{ text: '✏️ Enter name', web_app: { url } }]];
 }
 
-/** The "save contact" confirmation keyboard. */
-export function saveContactKeyboard(phoneNumber: string, employeeName: string): InlineKeyboard {
+/** The "save contact" confirmation keyboard. Returns null if the payload is too long. */
+export function saveContactKeyboard(phoneNumber: string, employeeName: string): InlineKeyboard | null {
+  const saved = savedCallbackData(phoneNumber, employeeName);
+  const remind = remindCallbackData(phoneNumber, employeeName);
+  if (!saved || !remind) return null;
   return [
     [
-      {
-        text: '✅ Saved',
-        callback_data: `saved:${encodeURIComponent(phoneNumber)}:${encodeURIComponent(employeeName)}`,
-      },
-      {
-        text: '⏰ Remind Later',
-        callback_data: `remind:${encodeURIComponent(phoneNumber)}:${encodeURIComponent(employeeName)}`,
-      },
+      { text: '✅ Saved', callback_data: saved },
+      { text: '⏰ Remind Later', callback_data: remind },
     ],
   ];
 }

@@ -3,9 +3,7 @@ import connectToDatabase from "@/lib/db";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
-import { runContactIntelligence } from "@/lib/contactIntelligence";
-import DeviceCallLog from "@/models/DeviceCallLog";
-import CallLog from "@/models/CallLog";
+import { syncEmployeeDeviceData } from "@/lib/employeeCallSync";
 import {
   answerCallbackQuery,
   editMessageText,
@@ -14,6 +12,9 @@ import {
   saveContactKeyboard,
   sendMessage,
 } from "@/lib/telegram";
+import { escapeHtml, escapeRegex, parseCallbackData } from "@/lib/telegramFormat";
+
+export const maxDuration = 60;
 
 function isValidRequest(req: Request): boolean {
   const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -21,71 +22,21 @@ function isValidRequest(req: Request): boolean {
   
   const providedSecret = req.headers.get("x-telegram-bot-api-secret-token");
   if (providedSecret !== expectedSecret) {
-    console.warn(`[Webhook Auth] Token mismatch. Expected: '${expectedSecret}', got: '${providedSecret}'`);
+    console.warn("[Webhook Auth] Telegram secret token mismatch.");
     return false;
   }
   return true;
 }
 
 /**
- * After an employee links their Telegram, process all their pending contacts
- * that couldn't be sent before (because chatId was null at the time).
+ * After an employee links Telegram to their device number, rebuild that device's
+ * contact records from its call logs and start sending any prompts that never went out.
  */
 async function processPendingForEmployee(employeeName: string) {
   try {
-    // 1. Scenario A: IdentifiedContacts with a name but no category (needs_category)
-    const pendingIdentified = await IdentifiedContact.find({
-      employeeName,
-      contactName: { $exists: true, $ne: null },
-      $or: [{ category: null }, { category: { $exists: false } }],
-    }).lean();
-
-    for (const contact of pendingIdentified) {
-      try {
-        await runContactIntelligence(
-          contact.phoneNumber,
-          contact.contactName,
-          employeeName,
-          (contact as any).deviceId || ""
-        );
-      } catch (e) {
-        console.error(`[PostRegistration] Failed for ${contact.phoneNumber}:`, e);
-      }
-    }
-
-    // 2. Scenario B: UnknownNumberTrackers at threshold still in 'tracking' status
-    const pendingTrackers = await UnknownNumberTracker.find({
-      employeeName,
-      status: "tracking",
-      callCount: { $gte: 5 },
-    }).lean();
-
-    for (const tracker of pendingTrackers) {
-      try {
-        // Find one call log for this phone+employee to get contactName/deviceId
-        const callLog = await DeviceCallLog.findOne({
-          phoneNumber: tracker.phoneNumber,
-          employeeName,
-        }).lean() as any;
-
-        const resolvedName =
-          callLog?.contactName && callLog.contactName !== "Unknown"
-            ? callLog.contactName
-            : undefined;
-
-        await runContactIntelligence(
-          tracker.phoneNumber,
-          resolvedName,
-          employeeName,
-          tracker.deviceId || callLog?.deviceId || ""
-        );
-      } catch (e) {
-        console.error(`[PostRegistration] Failed for tracker ${tracker.phoneNumber}:`, e);
-      }
-    }
-
+    const result = await syncEmployeeDeviceData(employeeName, 12);
     console.log(
-      `[PostRegistration] Processed ${pendingIdentified.length} identified + ${pendingTrackers.length} tracked for "${employeeName}"`
+      `[PostRegistration] Synced "${result.employeeName}": ${result.numbers} numbers, ${result.calls} calls, ${result.promptsSent} prompts sent, ${result.promptsRemaining} still queued`
     );
   } catch (err) {
     console.error("[PostRegistration] Error:", err);
@@ -120,93 +71,155 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[Telegram Webhook] Error:", err);
+    const callbackId = update?.callback_query?.id;
+    if (callbackId) {
+      await answerCallbackQuery(callbackId, "Could not save that. Please try again.").catch(() => {});
+    }
     return NextResponse.json({ ok: true });
   }
 }
 
 // ── Callback Query Handler ─────────────────────────────────────────────────
 
+const ALLOWED_CATEGORIES = new Set([
+  "personal",
+  "staff",
+  "Existing Client",
+  "New Client",
+  "courier",
+  "Family",
+  "Colleague",
+  "Other",
+]);
+
+function employeeNameQuery(employeeName: string) {
+  return new RegExp(`^${escapeRegex(employeeName)}$`, "i");
+}
+
+async function resolveEmployeeName(chatId: number, legacyName?: string): Promise<string | null> {
+  const linked = await EmployeeTelegram.findOne({ telegramChatId: String(chatId) }).lean() as any;
+  if (linked?.employeeName) {
+    if (legacyName && linked.employeeName.toLowerCase() !== legacyName.toLowerCase()) {
+      return null;
+    }
+    // Prefer the name embedded in the button so we update the call-log record,
+    // which can differ in casing from the Telegram setup row.
+    return legacyName || linked.employeeName;
+  }
+  return legacyName ?? null;
+}
+
 async function handleCallbackQuery(query: any) {
   const data: string = query.data ?? "";
   const chatId: number = query.message?.chat?.id;
   const messageId: number = query.message?.message_id;
   const callbackId: string = query.id;
+  const parsed = parseCallbackData(data);
 
-  // Category selection: cat:<phone>:<employee>:<category>
-  if (data.startsWith("cat:")) {
-    const parts = data.split(":");
-    const [, phonePart, empPart, ...catParts] = parts;
-    const phoneNumber = decodeURIComponent(phonePart);
-    const employeeName = decodeURIComponent(empPart);
-    const category = decodeURIComponent(catParts.join(":"));
+  if (parsed.type === "category") {
+    if (!ALLOWED_CATEGORIES.has(parsed.category)) {
+      await answerCallbackQuery(callbackId, "Unknown category");
+      return;
+    }
 
-    await answerCallbackQuery(callbackId, `Category saved: ${category}`);
+    const employeeName = await resolveEmployeeName(chatId, parsed.employeeName);
+    if (!employeeName) {
+      await answerCallbackQuery(callbackId, "This chat is not linked to that employee");
+      return;
+    }
 
-    const contact = await IdentifiedContact.findOneAndUpdate(
-      { phoneNumber, employeeName },
-      { $set: { category, identifiedAt: new Date(), telegramChatId: String(chatId) } },
-      { upsert: true, new: true }
-    );
+    const phoneNumber = parsed.phoneNumber;
+    const category = parsed.category;
+    const nameQuery = employeeNameQuery(employeeName);
+
+    let contact = await IdentifiedContact.findOne({ phoneNumber, employeeName: nameQuery });
+    if (!contact) {
+      contact = await IdentifiedContact.create({
+        phoneNumber,
+        employeeName,
+        category,
+        identifiedAt: new Date(),
+        telegramChatId: String(chatId),
+      });
+    } else {
+      contact.category = category as any;
+      contact.identifiedAt = new Date();
+      contact.telegramChatId = String(chatId);
+      await contact.save();
+    }
 
     await UnknownNumberTracker.updateOne(
-      { phoneNumber, employeeName },
+      { phoneNumber, employeeName: nameQuery },
       { $set: { status: "identified" } }
     );
+
+    await answerCallbackQuery(callbackId, `Category saved: ${category}`);
 
     const displayName =
       contact.contactName && contact.contactName !== phoneNumber
         ? contact.contactName
         : null;
-    const nameLine = displayName ? `Name: <b>${displayName}</b>\n` : "";
-    await editMessageText(
-      chatId,
-      messageId,
-      `✅ <b>Contact Classified</b>\n\n${nameLine}Category: <b>${category}</b>\nNumber: <code>${phoneNumber}</code>`
-    );
+    const nameLine = displayName ? `Name: <b>${escapeHtml(displayName)}</b>\n` : "";
+    if (chatId && messageId) {
+      await editMessageText(
+        chatId,
+        messageId,
+        `✅ <b>Contact Classified</b>\n\n${nameLine}Category: <b>${escapeHtml(category)}</b>\nNumber: <code>${escapeHtml(phoneNumber)}</code>`
+      );
+    }
 
     const confirmLine = displayName
-      ? `Name: <b>${displayName}</b>\nNumber: <code>${phoneNumber}</code>`
-      : `Number: <code>${phoneNumber}</code>`;
+      ? `Name: <b>${escapeHtml(displayName)}</b>\nNumber: <code>${escapeHtml(phoneNumber)}</code>`
+      : `Number: <code>${escapeHtml(phoneNumber)}</code>`;
     const saveText =
       `✅ Contact classified.\n\n` +
       `Confirm once you've saved this contact in your phone?\n\n` +
       confirmLine;
 
-    await sendInlineKeyboard(chatId, saveText, saveContactKeyboard(phoneNumber, employeeName));
+    const keyboard = saveContactKeyboard(phoneNumber, contact.employeeName);
+    if (keyboard) {
+      await sendInlineKeyboard(chatId, saveText, keyboard);
+    }
     return;
   }
 
-  // Saved confirmation: saved:<phone>:<employee>
-  if (data.startsWith("saved:")) {
-    const [, phonePart, empPart] = data.split(":");
-    const phoneNumber = decodeURIComponent(phonePart);
-    const employeeName = decodeURIComponent(empPart);
+  if (parsed.type === "saved") {
+    const employeeName = await resolveEmployeeName(chatId, parsed.employeeName);
+    if (!employeeName) {
+      await answerCallbackQuery(callbackId, "This chat is not linked to that employee");
+      return;
+    }
 
-    await answerCallbackQuery(callbackId, "Great! Contact saved ✅");
     await IdentifiedContact.updateOne(
-      { phoneNumber, employeeName },
+      { phoneNumber: parsed.phoneNumber, employeeName: employeeNameQuery(employeeName) },
       { $set: { savedInPhone: true, remindLater: false } }
     );
-    await editMessageText(chatId, messageId, `✅ Perfect! Contact has been saved in your phone.`);
+    await answerCallbackQuery(callbackId, "Great! Contact saved ✅");
+    if (chatId && messageId) {
+      await editMessageText(chatId, messageId, `✅ Perfect! Contact has been saved in your phone.`);
+    }
     return;
   }
 
-  // Remind Later: remind:<phone>:<employee>
-  if (data.startsWith("remind:")) {
-    const [, phonePart, empPart] = data.split(":");
-    const phoneNumber = decodeURIComponent(phonePart);
-    const employeeName = decodeURIComponent(empPart);
+  if (parsed.type === "remind") {
+    const employeeName = await resolveEmployeeName(chatId, parsed.employeeName);
+    if (!employeeName) {
+      await answerCallbackQuery(callbackId, "This chat is not linked to that employee");
+      return;
+    }
 
-    await answerCallbackQuery(callbackId, "We'll remind you later ⏰");
     await IdentifiedContact.updateOne(
-      { phoneNumber, employeeName },
+      { phoneNumber: parsed.phoneNumber, employeeName: employeeNameQuery(employeeName) },
       { $set: { remindLater: true } }
     );
-    await editMessageText(
-      chatId,
-      messageId,
-      `⏰ Reminder set. We'll remind you next time this number appears.`
-    );
+    await answerCallbackQuery(callbackId, "We'll remind you next time this number appears ⏰");
+    if (chatId && messageId) {
+      await editMessageText(
+        chatId,
+        messageId,
+        `⏰ Reminder set. We'll remind you next time this number appears.`
+      );
+    }
     return;
   }
 
@@ -226,7 +239,7 @@ async function handleMessage(message: any) {
     if (existing) {
       await sendMessage(
         chatId,
-        `👋 Welcome back, <b>${existing.employeeName}</b>!\n\nYou are already registered in the system.\n\nYour Telegram is connected to the call log intelligence system.`
+        `👋 Welcome back, <b>${escapeHtml(existing.employeeName)}</b>!\n\nYou are already registered in the system.\n\nYour Telegram is connected to the call log intelligence system.`
       );
       return;
     }
@@ -242,16 +255,26 @@ async function handleMessage(message: any) {
 
   // ── 2. Reply-based contact name identification ─────────────────────────
   if (replyToMessageId) {
-    const tracker = await UnknownNumberTracker.findOne({
-      telegramMessageId: replyToMessageId,
-      status: "awaiting_name",
-    });
+    const tracker = await UnknownNumberTracker.findOneAndUpdate(
+      {
+        telegramMessageId: replyToMessageId,
+        status: "awaiting_name",
+      },
+      { $set: { status: "awaiting_category" } },
+      { new: true }
+    );
 
     if (tracker) {
       const { phoneNumber, employeeName } = tracker;
-      const contactName = text;
+      const contactName = text.slice(0, 120).trim();
+      if (!contactName) {
+        tracker.status = "awaiting_name";
+        await tracker.save();
+        await sendMessage(chatId, `Please reply with the contact's name.`);
+        return;
+      }
 
-      await IdentifiedContact.findOneAndUpdate(
+      const contact = await IdentifiedContact.findOneAndUpdate(
         { phoneNumber, employeeName },
         {
           $set: { contactName, telegramChatId: String(chatId), deviceId: tracker.deviceId },
@@ -260,16 +283,26 @@ async function handleMessage(message: any) {
         { upsert: true, new: true }
       );
 
-      tracker.status = "awaiting_category";
-      await tracker.save();
-
+      const keyboard = categoryKeyboard(phoneNumber, employeeName);
       const categoryText =
         `✅ <b>Name saved!</b>\n\n` +
-        `Name: <b>${contactName}</b>\n` +
-        `Number: <code>${phoneNumber}</code>\n\n` +
+        `Name: <b>${escapeHtml(contactName)}</b>\n` +
+        `Number: <code>${escapeHtml(phoneNumber)}</code>\n\n` +
         `Please select the category:`;
 
-      await sendInlineKeyboard(chatId, categoryText, categoryKeyboard(phoneNumber, employeeName));
+      const sent = keyboard
+        ? await sendInlineKeyboard(chatId, categoryText, keyboard)
+        : null;
+
+      if (sent?.ok === true) {
+        contact.categoryRequestSentAt = new Date();
+        await contact.save();
+      } else {
+        await sendMessage(
+          chatId,
+          `Name saved. The category buttons could not be delivered just now — they will be sent again shortly.`
+        );
+      }
       return;
     }
     // Fall through to phone registration check
@@ -284,7 +317,7 @@ async function handleMessage(message: any) {
     if (alreadyLinked) {
       await sendMessage(
         chatId,
-        `✅ You are already registered as <b>${alreadyLinked.employeeName}</b>.`
+        `✅ You are already registered as <b>${escapeHtml(alreadyLinked.employeeName)}</b>.`
       );
       return;
     }
@@ -331,7 +364,7 @@ async function handleMessage(message: any) {
     await sendMessage(
       chatId,
       `✅ <b>Registration successful!</b>\n\n` +
-        `Employee: <b>${employee.employeeName}</b>\n` +
+        `Employee: <b>${escapeHtml(employee.employeeName)}</b>\n` +
         `Telegram connected successfully.\n\n` +
         `You will now receive contact classification requests from the call log system.`
     );
