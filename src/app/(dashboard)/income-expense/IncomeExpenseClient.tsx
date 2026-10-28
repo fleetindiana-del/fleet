@@ -22,6 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EXPENSE_CATEGORY_LABEL, type ExpenseCategory } from "@/lib/expenseMath";
 import { formatDateOnly, formatDateTime, formatINR, formatKm } from "@/lib/incomeExpenseFormat";
 import { cn } from "@/lib/utils";
 import { api, type AccountRow, type ExpenseDTO, type LedgerEntryDTO, type Page, type SummaryResponse } from "./apiClient";
@@ -215,7 +216,7 @@ function TypeMark({ category }: { category: string }) {
   return (
     <Badge variant="outline" className={cn("gap-1.5 px-2 py-0.5", meta.chip)}>
       <Icon className="h-3 w-3" aria-hidden />
-      {category}
+      {EXPENSE_CATEGORY_LABEL[category as ExpenseCategory] ?? category}
     </Badge>
   );
 }
@@ -575,6 +576,16 @@ export default function IncomeExpenseClient() {
                         )}
                         {txn.expense?.runKm == null && txn.expense?.odometerKm != null && (
                           <p className="mt-1 text-xs text-slate-400">Odometer {formatKm(txn.expense.odometerKm)}</p>
+                        )}
+                        {txn.expense && txn.expense.hasReceipt !== false && (
+                          <a href={txn.expense.receiptUrl} target="_blank" rel="noreferrer" className="mt-2 block w-fit">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={txn.expense.receiptUrl}
+                              alt="Bill"
+                              className="h-20 w-20 rounded-md border border-slate-700 bg-black object-cover"
+                            />
+                          </a>
                         )}
                         {txn.expense?.status === "rejected" && txn.expense.rejectionReason && (
                           <p className="mt-1 text-xs text-rose-300">Rejected: {txn.expense.rejectionReason}</p>

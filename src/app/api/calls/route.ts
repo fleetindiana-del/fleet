@@ -3,7 +3,18 @@ import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
 import BotLog from "@/models/BotLog";
 import { runContactIntelligence, retryUnsentPrompts } from "@/lib/contactIntelligence";
+import { walletForEmployee } from "@/lib/deviceWallet";
 import mongoose from "mongoose";
+
+async function walletForSync(employeeName: unknown) {
+  if (typeof employeeName !== "string" || !employeeName.trim()) return null;
+  try {
+    return await walletForEmployee(employeeName);
+  } catch (error) {
+    console.error("Wallet lookup during call sync failed:", error);
+    return null;
+  }
+}
 
 function normalizeCallType(raw: unknown): string {
   const u = String(raw ?? "").toUpperCase().trim();
@@ -26,6 +37,7 @@ function normalizeTimestamp(raw: unknown): Date {
 
 // POST — called by the Android app (authenticated via X-API-Key)
 export async function POST(req: Request) {
+  let employeeName = "";
   try {
     const apiKey = req.headers.get("x-api-key");
     const expectedKey = process.env.API_KEY;
@@ -34,7 +46,8 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { phoneNumber, contactName, callType, duration, timestamp, deviceId, employeeName } = body;
+    const { phoneNumber, contactName, callType, duration, timestamp, deviceId } = body;
+    employeeName = typeof body.employeeName === "string" ? body.employeeName : "";
 
     const missingFields: string[] = [];
     if (!phoneNumber) missingFields.push("phoneNumber");
@@ -92,12 +105,14 @@ export async function POST(req: Request) {
       }).catch(() => {});
     }
 
-    return NextResponse.json({ success: true, id: callLog._id }, { status: 201 });
+    const wallet = await walletForSync(resolvedEmployee);
+    return NextResponse.json({ success: true, id: callLog._id, wallet }, { status: 201 });
   } catch (error: any) {
     console.error("Failed to save call log:", error);
     // Ignore duplicate key errors gracefully
     if (error.code === 11000) {
-      return NextResponse.json({ success: true, message: "Duplicate, skipped" }, { status: 200 });
+      const wallet = await walletForSync(employeeName);
+      return NextResponse.json({ success: true, message: "Duplicate, skipped", wallet }, { status: 200 });
     }
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }

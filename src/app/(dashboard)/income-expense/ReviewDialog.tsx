@@ -116,6 +116,7 @@ export function ReviewDialog({ expense, mode, driverBalance, onClose, onDone }: 
                 )}
               </p>
             )}
+            {expense.hasReceipt !== false && (
             <a href={expense.receiptUrl} target="_blank" rel="noreferrer" className="block border-t border-slate-800 pt-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -124,6 +125,7 @@ export function ReviewDialog({ expense, mode, driverBalance, onClose, onDone }: 
                 className="max-h-56 w-full rounded-md border border-slate-800 bg-black object-contain"
               />
             </a>
+            )}
           </div>
 
           {approve && excess > 0 && (

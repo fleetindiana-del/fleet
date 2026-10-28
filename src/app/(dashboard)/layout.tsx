@@ -19,7 +19,7 @@ export default async function DashboardLayout({
 
   // Drivers shouldn't access the web dashboard, route them to their mobile portal
   if (session.user.role === "driver") {
-    redirect("/driver/dashboard");
+    redirect("/driver/add-expense");
   }
 
   return (

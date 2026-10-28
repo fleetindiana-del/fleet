@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
+import { walletForEmployee } from "@/lib/deviceWallet";
 import ToggleLog from "@/models/ToggleLog";
 
 // POST — called by the Android app (authenticated via X-API-Key)
@@ -53,7 +54,15 @@ export async function POST(req: Request) {
     });
 
     console.log(`🔌 Toggle ${normalizedStatus} | ${employeeName} | ${deviceId}`);
-    return NextResponse.json({ success: true, id: toggleLog._id }, { status: 201 });
+    let wallet = null;
+    try {
+      if (typeof employeeName === "string" && employeeName.trim()) {
+        wallet = await walletForEmployee(employeeName);
+      }
+    } catch (error) {
+      console.error("Wallet lookup during status sync failed:", error);
+    }
+    return NextResponse.json({ success: true, id: toggleLog._id, wallet }, { status: 201 });
   } catch (error) {
     console.error("Failed to save toggle log:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

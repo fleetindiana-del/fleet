@@ -34,6 +34,16 @@ export const EXPENSE_CATEGORIES = [
 ] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
+/** Driver-facing names. Fuel is stored as Fuel so petrol fills keep the odometer rules. */
+export const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
+  Fuel: "Petrol",
+  Toll: "Toll",
+  Food: "Food",
+  Parking: "Parking",
+  Maintenance: "Maintenance",
+  Other: "Other",
+};
+
 /** Roles that may allocate advances and approve/reject expenses. */
 export const STAFF_ROLES = ["super_admin", "admin", "hr"] as const;
 

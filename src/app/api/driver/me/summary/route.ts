@@ -36,8 +36,8 @@ export async function GET() {
       getDriverAccount(driverId),
       listExpenses({ driverId, limit: 10 }),
       Vehicle.find({ companyId: driver.companyId, status: "active" })
-        .select("registration odometerKm")
-        .sort({ registration: 1 })
+        .select("registration make vehicleModel odometerKm")
+        .sort({ vehicleModel: 1, registration: 1 })
         .lean(),
     ]);
 
@@ -56,6 +56,8 @@ export async function GET() {
       vehicles: vehicles.map((v) => ({
         id: String(v._id),
         registration: v.registration,
+        make: v.make ?? null,
+        model: v.vehicleModel ?? null,
         odometerKm: typeof v.odometerKm === "number" ? v.odometerKm : null,
       })),
       recentExpenses: recent.items.map((e) => ({

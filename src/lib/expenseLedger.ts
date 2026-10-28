@@ -142,8 +142,13 @@ async function stampFuelOdometer(
     vehicleId?: string;
   }
 ): Promise<FuelStamp> {
-  let vehicle: { _id: mongoose.Types.ObjectId; registration?: string; odometerKm?: number; companyId?: unknown } | null =
-    null;
+  let vehicle: {
+    _id: mongoose.Types.ObjectId;
+    registration?: string;
+    vehicleModel?: string;
+    odometerKm?: number;
+    companyId?: unknown;
+  } | null = null;
   if (input.vehicleId) {
     if (!mongoose.Types.ObjectId.isValid(input.vehicleId)) {
       throw new LedgerError(400, "INVALID_VEHICLE", "Choose a vehicle.");
@@ -154,7 +159,7 @@ async function stampFuelOdometer(
     }
   } else {
     const active = await VehicleM.find({ companyId: input.companyId, status: "active" })
-      .select("_id registration odometerKm companyId")
+      .select("_id registration vehicleModel odometerKm companyId")
       .session(session)
       .lean();
     if (active.length > 1) {
@@ -210,7 +215,7 @@ async function stampFuelOdometer(
     previousOdometerKm: previous ?? undefined,
     runKm: run ?? undefined,
     vehicleId: vehicle?._id,
-    vehicleRegistration: vehicle?.registration,
+    vehicleRegistration: vehicle?.vehicleModel?.trim() || vehicle?.registration,
   };
 }
 
@@ -458,6 +463,8 @@ export interface ExpenseDTO {
   walletBalanceAfter: number | null;
   location: { lat: number; lng: number } | null;
   receiptUrl: string;
+  /** False only when the driver submitted without a bill photo (a petrol fill). */
+  hasReceipt?: boolean;
   /** Odometer at a petrol fill, and the kilometers driven since the previous reading. */
   odometerKm: number | null;
   previousOdometerKm: number | null;
@@ -532,6 +539,7 @@ interface ExpenseRow {
   walletBalanceAfter?: number;
   deductedOnSubmit?: boolean;
   location?: { lat: number; lng: number };
+  hasReceipt?: boolean;
   odometerKm?: number;
   previousOdometerKm?: number;
   runKm?: number;
@@ -586,6 +594,7 @@ function toExpenseDTO(e: ExpenseRow): ExpenseDTO {
     walletBalanceAfter: e.walletBalanceAfter ?? null,
     location: e.location ? { lat: e.location.lat, lng: e.location.lng } : null,
     receiptUrl: receiptUrlFor(String(e._id)),
+    hasReceipt: e.hasReceipt !== false,
     odometerKm: typeof e.odometerKm === "number" ? e.odometerKm : null,
     previousOdometerKm: typeof e.previousOdometerKm === "number" ? e.previousOdometerKm : null,
     runKm: typeof e.runKm === "number" ? e.runKm : null,
@@ -928,8 +937,12 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
     throw new LedgerError(400, "INVALID_DATE", "Enter a valid expense date that is not in the future.");
   }
 
-  const receipt = parseReceiptDataUrl(input.photoDataUrl);
-  if (!receipt) {
+  const photoSent = input.photoDataUrl != null && input.photoDataUrl !== "";
+  const receipt = photoSent ? parseReceiptDataUrl(input.photoDataUrl) : null;
+  if (photoSent && !receipt) {
+    throw new LedgerError(400, "RECEIPT_REQUIRED", "Attach a clear photo of the bill or receipt (JPEG, PNG or WebP, up to 5 MB).");
+  }
+  if (!receipt && category !== "Fuel") {
     throw new LedgerError(400, "RECEIPT_REQUIRED", "Attach a clear photo of the bill or receipt (JPEG, PNG or WebP, up to 5 MB).");
   }
 
@@ -958,7 +971,7 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
   const userId = toObjectId(input.userId, "user");
   const submissionKey = expenseSubmissionKey(
     input.clientRequestId,
-    { amount, category, receiptBase64: receipt.base64 },
+    { amount, category, receiptBase64: receipt?.base64 ?? "" },
     sha256Hex
   );
 
@@ -1023,7 +1036,8 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
             category,
             description: description || undefined,
             expenseDate,
-            photoUrl: `data:${receipt.mime};base64,${receipt.base64}`,
+            ...(receipt ? { photoUrl: `data:${receipt.mime};base64,${receipt.base64}` } : {}),
+            hasReceipt: !!receipt,
             location: { lat, lng },
             locationAccuracy: accuracy,
             timestamp: now,

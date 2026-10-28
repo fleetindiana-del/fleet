@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Camera, CheckCircle2, Image as ImageIcon, Loader2, MapPin, RotateCcw, X } from "lucide-react";
-import { EXPENSE_CATEGORIES, type ExpenseCategory } from "@/lib/expenseMath";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABEL, type ExpenseCategory } from "@/lib/expenseMath";
+import { gpsFromJpeg } from "@/lib/jpegGps";
 import { formatKm } from "@/lib/incomeExpenseFormat";
 import { CATEGORY_STYLE, formatRupees } from "../WalletUI";
 
@@ -25,7 +26,13 @@ interface SubmitResult {
 interface VehicleOption {
   id: string;
   registration: string;
+  make: string | null;
+  model: string | null;
   odometerKm: number | null;
+}
+
+function vehicleLabel(v: VehicleOption): string {
+  return v.model?.trim() || v.registration;
 }
 
 /** Works on plain-http LAN addresses too, where crypto.randomUUID is unavailable. */
@@ -145,6 +152,10 @@ export default function AddExpensePage() {
     };
   }, [startGps]);
 
+  useEffect(() => {
+    if (category === "Fuel") startGps();
+  }, [category, startGps]);
+
   const amountNum = Number.parseFloat(amount);
   const validAmount = Number.isFinite(amountNum) && amountNum > 0;
   const odometerNum = Number.parseFloat(odometer);
@@ -169,7 +180,16 @@ export default function AddExpensePage() {
     if (!file) return;
     setPhotoBusy(true);
     setError("");
+    startGps();
     try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const fromPhoto = gpsFromJpeg(bytes);
+      if (fromPhoto) {
+        const f = { lat: fromPhoto.lat, lng: fromPhoto.lng, acc: 0 };
+        bestFix.current = f;
+        setFix(f);
+        setGps("ready");
+      }
       setPhoto(await compressImage(file));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not use that photo.");
@@ -179,16 +199,17 @@ export default function AddExpensePage() {
   }
 
   async function submit() {
+    if (!category) return setError("Choose the type of expense.");
     if (!validAmount) return setError("Enter the amount you spent.");
     if (category === "Fuel") {
+      if (!vehicleId) return setError(vehicles.length === 0 ? "No vehicles are in the vehicle master yet." : "Choose the vehicle.");
       if (!Number.isFinite(odometerNum) || odometerNum < 0) return setError("Enter the odometer reading in kilometers.");
-      if (vehicles.length > 1 && !vehicleId) return setError("Choose the vehicle.");
       if (selectedVehicle?.odometerKm != null && odometerNum <= selectedVehicle.odometerKm) {
         return setError(`Odometer must be higher than the last reading (${formatKm(selectedVehicle.odometerKm)}).`);
       }
     }
     if (!expenseDate) return setError("Choose the date of the expense.");
-    if (!photo) return setError("Take a photo of the bill or receipt.");
+    if (category !== "Fuel" && !photo) return setError("Take a photo of the bill.");
     if (!bestFix.current) {
       if (gps === "idle" || gps === "error") startGps();
       return setError("Waiting for your location. Keep Location on and try again in a moment.");
@@ -201,7 +222,7 @@ export default function AddExpensePage() {
       category,
       description: description.trim(),
       expenseDate,
-      photoBase64: photo,
+      ...(photo ? { photoBase64: photo } : {}),
       latitude: bestFix.current.lat,
       longitude: bestFix.current.lng,
       accuracy: bestFix.current.acc,
@@ -312,6 +333,33 @@ export default function AddExpensePage() {
         <h1 className="text-xl font-bold tracking-tight text-white">Add expense</h1>
       </div>
 
+      <div>
+        <p className="mb-2 px-1 text-sm font-medium text-slate-300">Type of expense</p>
+        <div className="grid grid-cols-3 gap-2">
+          {EXPENSE_CATEGORIES.map((c) => {
+            const s = CATEGORY_STYLE[c];
+            const Icon = s.icon;
+            const active = c === category;
+            return (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setCategory(c)}
+                aria-pressed={active}
+                className={`flex flex-col items-center gap-1.5 rounded-2xl py-3 text-xs font-medium ring-1 transition-colors ${
+                  active ? "bg-indigo-500/15 text-white ring-indigo-400" : "bg-slate-900 text-slate-300 ring-slate-800 hover:bg-slate-800"
+                }`}
+              >
+                <span className={`flex h-10 w-10 items-center justify-center rounded-full ${s.tone}`}>
+                  <Icon className="h-5 w-5" />
+                </span>
+                {EXPENSE_CATEGORY_LABEL[c]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Amount */}
       <div className="flex flex-col items-center pt-2">
         <label htmlFor="amount" className="text-sm text-slate-400">
@@ -350,43 +398,13 @@ export default function AddExpensePage() {
         )}
       </div>
 
-      {/* Category */}
-      <div>
-        <p className="mb-2 px-1 text-sm font-medium text-slate-300">
-          Category <span className="font-normal text-slate-500">(optional)</span>
-        </p>
-        <div className="grid grid-cols-3 gap-2">
-          {EXPENSE_CATEGORIES.map((c) => {
-            const s = CATEGORY_STYLE[c];
-            const Icon = s.icon;
-            const active = c === category;
-            return (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCategory(active ? null : c)}
-                aria-pressed={active}
-                className={`flex flex-col items-center gap-1.5 rounded-2xl py-3 text-xs font-medium ring-1 transition-colors ${
-                  active ? "bg-indigo-500/15 text-white ring-indigo-400" : "bg-slate-900 text-slate-300 ring-slate-800 hover:bg-slate-800"
-                }`}
-              >
-                <span className={`flex h-10 w-10 items-center justify-center rounded-full ${s.tone}`}>
-                  <Icon className="h-5 w-5" />
-                </span>
-                {c}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {category === "Fuel" && (
         <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-4">
           <div>
             <p className="text-sm font-medium text-slate-300">Odometer</p>
             <p className="mt-0.5 text-xs text-slate-500">The reading on the vehicle at this petrol fill. The difference is the kilometers of the run.</p>
           </div>
-          {vehicles.length > 1 && (
+          {vehicles.length > 0 ? (
             <select
               value={vehicleId}
               onChange={(e) => setVehicleId(e.target.value)}
@@ -395,17 +413,13 @@ export default function AddExpensePage() {
               <option value="">Choose vehicle</option>
               {vehicles.map((v) => (
                 <option key={v.id} value={v.id}>
-                  {v.registration}
+                  {vehicleLabel(v)}
                   {v.odometerKm != null ? ` · ${formatKm(v.odometerKm)}` : ""}
                 </option>
               ))}
             </select>
-          )}
-          {vehicles.length === 1 && (
-            <p className="text-sm text-slate-300">
-              {vehicles[0].registration}
-              {vehicles[0].odometerKm != null ? ` · last reading ${formatKm(vehicles[0].odometerKm)}` : ""}
-            </p>
+          ) : (
+            <p className="text-sm text-amber-300">No vehicles are in the vehicle master yet.</p>
           )}
           <input
             inputMode="decimal"
@@ -414,7 +428,7 @@ export default function AddExpensePage() {
             placeholder="Current reading (km)"
             className="h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-slate-100 placeholder:text-slate-600 focus:border-indigo-400 focus:outline-none"
           />
-          {selectedVehicle && selectedVehicle.odometerKm != null && vehicles.length !== 1 && (
+          {selectedVehicle?.odometerKm != null && (
             <p className="text-xs text-slate-400">Last reading {formatKm(selectedVehicle.odometerKm)}</p>
           )}
           {runPreview != null && (
@@ -423,7 +437,8 @@ export default function AddExpensePage() {
         </div>
       )}
 
-      {/* Receipt */}
+      {/* Receipt — bill types. Petrol uses the odometer and the vehicle instead. */}
+      {category && category !== "Fuel" && (
       <div>
         <p className="mb-2 px-1 text-sm font-medium text-slate-300">Bill or receipt photo</p>
         {photo ? (
@@ -433,7 +448,10 @@ export default function AddExpensePage() {
             <div className="absolute right-2 top-2 flex gap-2">
               <button
                 type="button"
-                onClick={() => cameraInput.current?.click()}
+                onClick={() => {
+                  startGps();
+                  cameraInput.current?.click();
+                }}
                 className="flex items-center gap-1 rounded-full bg-slate-950/80 px-3 py-1.5 text-xs font-medium text-white backdrop-blur"
               >
                 <RotateCcw className="h-3.5 w-3.5" /> Retake
@@ -452,7 +470,10 @@ export default function AddExpensePage() {
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => cameraInput.current?.click()}
+              onClick={() => {
+                startGps();
+                cameraInput.current?.click();
+              }}
               disabled={photoBusy}
               className="flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-indigo-500/50 bg-indigo-500/5 text-indigo-200 hover:bg-indigo-500/10"
             >
@@ -461,7 +482,10 @@ export default function AddExpensePage() {
             </button>
             <button
               type="button"
-              onClick={() => galleryInput.current?.click()}
+              onClick={() => {
+                startGps();
+                galleryInput.current?.click();
+              }}
               disabled={photoBusy}
               className="flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
             >
@@ -473,6 +497,7 @@ export default function AddExpensePage() {
         <input ref={cameraInput} type="file" accept="image/*" capture="environment" onChange={onPhotoPicked} className="hidden" />
         <input ref={galleryInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={onPhotoPicked} className="hidden" />
       </div>
+      )}
 
       {/* Details */}
       <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
@@ -519,7 +544,9 @@ export default function AddExpensePage() {
         />
         <span>
           {gps === "ready" && fix ? (
-            <span className="text-slate-200">Location captured (±{Math.round(fix.acc)} m)</span>
+            <span className="text-slate-200">
+              {fix.acc === 0 ? "Location taken from the photo" : `Location captured (±${Math.round(fix.acc)} m)`}
+            </span>
           ) : gps === "warming" ? (
             <span className="text-amber-300">Getting your location…</span>
           ) : gps === "denied" ? (

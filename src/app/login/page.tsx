@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,8 @@ export default function LoginPage() {
       setError(res.error);
       setLoading(false);
     } else {
-      router.push("/");
+      const session = await getSession();
+      router.push(session?.user?.role === "driver" ? "/driver/add-expense" : "/");
       router.refresh();
     }
   };

@@ -144,6 +144,7 @@ export default async function TransactionPage({ params }: { params: Promise<{ id
         </ol>
       </section>
 
+      {e.hasReceipt !== false && (
       <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
         <h2 className="px-4 pt-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Bill / receipt</h2>
         <a href={e.receiptUrl} target="_blank" rel="noreferrer" className="block p-4">
@@ -156,6 +157,7 @@ export default async function TransactionPage({ params }: { params: Promise<{ id
           <span className="mt-2 block text-center text-xs text-indigo-400">Tap to open full size</span>
         </a>
       </section>
+      )}
 
       <dl className="divide-y divide-slate-800 rounded-2xl border border-slate-800 bg-slate-900 text-sm">
         {e.vehicleRegistration && (

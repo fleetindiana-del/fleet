@@ -138,6 +138,8 @@ export function ExpensesPanel({
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-1.5">
+                      {e.hasReceipt !== false && (
+                      <>
                       <a href={e.receiptUrl} target="_blank" rel="noreferrer" title="Open receipt" className="block w-fit">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
@@ -155,6 +157,8 @@ export function ExpensesPanel({
                       >
                         <Receipt className="mr-1 h-3 w-3" /> Receipt
                       </a>
+                      </>
+                      )}
                       {e.location && (
                         <a
                           href={`https://maps.google.com/?q=${e.location.lat},${e.location.lng}`}

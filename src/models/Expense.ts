@@ -57,7 +57,8 @@ const ExpenseSchema = new Schema(
     description: { type: String, trim: true, maxlength: 500 },
     note: { type: String },
     expenseDate: { type: Date },
-    photoUrl: { type: String, required: true }, // base64 data URL; served via the receipt endpoint
+    photoUrl: { type: String }, // base64 data URL; served via the receipt endpoint. Petrol fills may omit it.
+    hasReceipt: { type: Boolean },
     location: {
       lat: { type: Number, required: true },
       lng: { type: Number, required: true },
