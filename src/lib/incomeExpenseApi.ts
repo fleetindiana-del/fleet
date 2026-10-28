@@ -5,7 +5,7 @@ import mongoose from "mongoose";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import { LedgerError, companyScopeFor, type Actor } from "@/lib/expenseLedger";
-import { canManageIncomeExpense, LEDGER_ENTRY_TYPES, type LedgerEntryType } from "@/lib/expenseMath";
+import { canManageIncomeExpense, EXPENSE_CATEGORIES, LEDGER_ENTRY_TYPES, type ExpenseCategory, type LedgerEntryType } from "@/lib/expenseMath";
 
 export function errorResponse(e: unknown): NextResponse {
   if (e instanceof LedgerError) {
@@ -80,6 +80,14 @@ export function optionalLedgerType(value: string | null): LedgerEntryType | unde
     throw new LedgerError(400, "INVALID_TYPE", "Unknown transaction type.");
   }
   return value as LedgerEntryType;
+}
+
+export function optionalExpenseCategory(value: string | null): ExpenseCategory | undefined {
+  if (!value) return undefined;
+  if (!(EXPENSE_CATEGORIES as readonly string[]).includes(value)) {
+    throw new LedgerError(400, "INVALID_CATEGORY", "Unknown expense category.");
+  }
+  return value as ExpenseCategory;
 }
 
 export function optionalExpenseStatus(value: string | null) {

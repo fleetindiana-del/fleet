@@ -6,7 +6,7 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import Driver from "@/models/Driver";
 import { getDriverExpense } from "@/lib/expenseLedger";
-import { formatDateOnly } from "@/lib/incomeExpenseFormat";
+import { formatDateOnly, formatKm } from "@/lib/incomeExpenseFormat";
 import { LocalDateTime } from "@/components/LocalDateTime";
 import { CategoryBadge, StatusPill, formatRupees } from "../../WalletUI";
 
@@ -158,6 +158,27 @@ export default async function TransactionPage({ params }: { params: Promise<{ id
       </section>
 
       <dl className="divide-y divide-slate-800 rounded-2xl border border-slate-800 bg-slate-900 text-sm">
+        {e.vehicleRegistration && (
+          <div className="flex justify-between gap-4 px-4 py-3">
+            <dt className="text-slate-400">Vehicle</dt>
+            <dd className="text-slate-100">{e.vehicleRegistration}</dd>
+          </div>
+        )}
+        {e.odometerKm != null && (
+          <div className="flex justify-between gap-4 px-4 py-3">
+            <dt className="text-slate-400">Odometer</dt>
+            <dd className="text-slate-100">{formatKm(e.odometerKm)}</dd>
+          </div>
+        )}
+        {e.runKm != null && (
+          <div className="flex justify-between gap-4 px-4 py-3">
+            <dt className="text-slate-400">This run</dt>
+            <dd className="font-medium text-emerald-300">
+              {formatKm(e.runKm)}
+              {e.previousOdometerKm != null ? ` (${formatKm(e.previousOdometerKm)} → ${formatKm(e.odometerKm)})` : ""}
+            </dd>
+          </div>
+        )}
         <div className="flex justify-between gap-4 px-4 py-3">
           <dt className="text-slate-400">Date of expense</dt>
           <dd className="text-slate-100">{formatDateOnly(e.expenseDate)}</dd>

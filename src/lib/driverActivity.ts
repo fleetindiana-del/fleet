@@ -53,7 +53,7 @@ export function buildActivity(
         amount: e.amount,
         at: e.submittedAt,
         title: e.description || e.category,
-        subtitle: e.category,
+        subtitle: e.runKm != null ? `${e.category} · ${e.runKm.toLocaleString("en-IN", { maximumFractionDigits: 1 })} km` : e.category,
         balanceAfter: e.walletBalanceAfter,
         expense: e,
       });

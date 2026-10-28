@@ -1,10 +1,11 @@
-import type { AccountRow, AccountTotals, ExpenseDTO, LedgerEntryDTO } from "@/lib/expenseLedger";
+import type { AccountRow, AccountTotals, CategorySpend, ExpenseDTO, LedgerEntryDTO } from "@/lib/expenseLedger";
 
-export type { AccountRow, AccountTotals, ExpenseDTO, LedgerEntryDTO };
+export type { AccountRow, AccountTotals, CategorySpend, ExpenseDTO, LedgerEntryDTO };
 
 export interface SummaryResponse {
   drivers: AccountRow[];
   totals: AccountTotals;
+  categories?: CategorySpend[];
 }
 
 export interface Page<T> {

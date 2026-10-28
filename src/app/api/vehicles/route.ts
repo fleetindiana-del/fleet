@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import Vehicle from "@/models/Vehicle";
+import { parseOdometer } from "@/lib/expenseMath";
 import mongoose from "mongoose";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +44,14 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const { registration, make, model, vehicleModel, status } = body;
+    let odometerKm: number | undefined;
+    if (body.odometerKm !== undefined && body.odometerKm !== null && body.odometerKm !== "") {
+      const parsed = parseOdometer(body.odometerKm);
+      if (parsed === null) {
+        return NextResponse.json({ error: "Enter the odometer in kilometers." }, { status: 400 });
+      }
+      odometerKm = parsed;
+    }
 
     if (!registration) {
       return NextResponse.json({ error: "Registration is required" }, { status: 400 });
@@ -61,6 +70,7 @@ export async function POST(req: Request) {
       make,
       vehicleModel: vehicleModel || model,
       status,
+      odometerKm,
     });
     return NextResponse.json(
       { ...vehicle.toObject(), model: vehicle.vehicleModel },

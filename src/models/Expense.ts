@@ -38,6 +38,14 @@ export interface IExpense extends Document {
   deductedOnSubmit?: boolean;
   /** Idempotency key, unique per driver: a retried or double-tapped submission is a no-op. */
   submissionKey?: string;
+  /** Odometer at this petrol fill, in kilometers. */
+  odometerKm?: number;
+  /** Reading this fill is measured from. Unset on the first reading for a vehicle. */
+  previousOdometerKm?: number;
+  /** Kilometers driven since `previousOdometerKm`. */
+  runKm?: number;
+  vehicleId?: mongoose.Types.ObjectId;
+  vehicleRegistration?: string;
 }
 
 const ExpenseSchema = new Schema(
@@ -65,11 +73,17 @@ const ExpenseSchema = new Schema(
     walletBalanceAfter: { type: Number },
     deductedOnSubmit: { type: Boolean },
     submissionKey: { type: String },
+    odometerKm: { type: Number, min: 0 },
+    previousOdometerKm: { type: Number, min: 0 },
+    runKm: { type: Number, min: 0 },
+    vehicleId: { type: Schema.Types.ObjectId, ref: 'Vehicle' },
+    vehicleRegistration: { type: String, trim: true },
   },
   { timestamps: true }
 );
 
 ExpenseSchema.index({ companyId: 1, status: 1, timestamp: -1 });
+ExpenseSchema.index({ vehicleId: 1, timestamp: -1 });
 ExpenseSchema.index({ driverId: 1, timestamp: -1 });
 ExpenseSchema.index(
   { driverId: 1, submissionKey: 1 },

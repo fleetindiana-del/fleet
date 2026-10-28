@@ -26,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { normalizeContactName, normalizePhoneDigits } from "@/lib/contactNormalize";
+import { normalizeContactName, normalizePhoneDigits, phoneKeyOf } from "@/lib/contactNormalize";
 import { ContactInsights } from "./ContactInsights";
 
 // Rows rendered at a time in the results table. The list can run into the
@@ -40,10 +40,105 @@ export type MergedContactRow = {
   id: string;
   contactName: string;
   phoneNumbers: string[];
-  sources: Array<{ employeeName: string; deviceId: string; phoneNumber: string }>;
+  sources: Array<{
+    employeeName: string;
+    deviceId: string;
+    phoneNumber: string;
+    /** Name this employee saved for this number. Empty on clusters built before that was stored. */
+    contactName?: string;
+  }>;
   sourceCount: number;
   lastSyncedAt: string | null;
 };
+
+type ContactSource = MergedContactRow["sources"][number];
+
+type PhoneGroup = {
+  key: string;
+  phoneNumber: string;
+  sources: ContactSource[];
+  shared: boolean;
+};
+
+type NameSection = {
+  key: string;
+  /** Display name for this spelling. Blank when nobody stored a name. */
+  name: string;
+  sources: ContactSource[];
+};
+
+function dedupeSources(sources: ContactSource[]): ContactSource[] {
+  const seen = new Set<string>();
+  const out: ContactSource[] = [];
+  for (const s of sources) {
+    const id = [
+      s.employeeName,
+      s.deviceId,
+      phoneKeyOf(s.phoneNumber),
+      normalizeContactName(s.contactName),
+    ].join("|");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(s);
+  }
+  return out;
+}
+
+/** One bucket per distinct saved name. Case and punctuation variants share a
+ * bucket (the longest spelling wins the heading) but each source keeps the
+ * exact string that employee assigned. */
+function nameSectionsFor(sources: ContactSource[], fallback = ""): NameSection[] {
+  const buckets = new Map<string, NameSection>();
+  const order: string[] = [];
+  for (const s of sources) {
+    const raw = s.contactName?.trim() || "";
+    const missing = !raw;
+    const unknown = raw.toLowerCase() === "unknown";
+    const key = missing ? "\0missing" : unknown ? "\0unknown" : normalizeContactName(raw);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { key, name: missing || unknown ? "" : raw, sources: [] };
+      buckets.set(key, bucket);
+      order.push(key);
+    }
+    bucket.sources.push(s);
+    if (!missing && !unknown && raw.length > bucket.name.length) bucket.name = raw;
+  }
+  const rank = (key: string) => (key === "\0missing" ? 2 : key === "\0unknown" ? 1 : 0);
+  const sections = order
+    .map((key) => buckets.get(key)!)
+    .sort((a, b) => rank(a.key) - rank(b.key) || b.sources.length - a.sources.length || a.name.localeCompare(b.name));
+  // Clusters built before assigned names were stored only have the merged name.
+  // Show that once, without pretending each person typed it.
+  if (sections.length === 1 && sections[0].key === "\0missing" && !sections[0].name) {
+    const fb = fallback.trim();
+    if (fb && fb.toLowerCase() !== "unknown") sections[0].name = fb;
+  }
+  return sections;
+}
+
+function phoneGroupsOf(contact: MergedContactRow): PhoneGroup[] {
+  const buckets = new Map<string, ContactSource[]>();
+  const order: string[] = [];
+  const add = (key: string, source?: ContactSource) => {
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      order.push(key);
+    }
+    if (source) buckets.get(key)!.push(source);
+  };
+  for (const s of contact.sources) add(phoneKeyOf(s.phoneNumber) || s.phoneNumber || "", s);
+  for (const p of contact.phoneNumbers) add(phoneKeyOf(p) || p);
+
+  return order.map((key) => {
+    const sources = dedupeSources(buckets.get(key) ?? []);
+    const phoneNumber =
+      contact.phoneNumbers.find((p) => (phoneKeyOf(p) || p) === key) ||
+      sources.find((s) => s.phoneNumber)?.phoneNumber ||
+      key;
+    return { key, phoneNumber, sources, shared: sources.length > 1 };
+  });
+}
 
 const AVATAR_PALETTE = [
   "#6366f1", // indigo
@@ -182,6 +277,121 @@ function LastSynced({ iso, now }: { iso: string | null; now: number }) {
   );
 }
 
+function sectionTitle(section: NameSection): string {
+  if (section.name) return section.name;
+  if (section.key === "\0unknown") return "Unknown";
+  return "No name saved";
+}
+
+function savedAsLabel(source: ContactSource): string {
+  const name = source.contactName?.trim() || "";
+  if (!name) return "No name saved";
+  return name;
+}
+
+/** Same saved name stays together so the frame reads as groups, not a shuffle. */
+function sourcesInNameOrder(sources: ContactSource[]): ContactSource[] {
+  const rank = (source: ContactSource) => {
+    const name = source.contactName?.trim() || "";
+    if (!name) return "\uffff2";
+    if (name.toLowerCase() === "unknown") return "\uffff1";
+    return normalizeContactName(name);
+  };
+  return [...sources].sort(
+    (a, b) =>
+      rank(a).localeCompare(rank(b)) ||
+      a.employeeName.localeCompare(b.employeeName) ||
+      a.deviceId.localeCompare(b.deviceId)
+  );
+}
+
+/** One number, every name it was saved under, then each person on a single line. */
+function SharedPhoneBlock({
+  group,
+  fallbackName,
+  nameQuery,
+  phoneQuery,
+  syncedAt,
+  now,
+}: {
+  group: PhoneGroup;
+  fallbackName: string;
+  nameQuery: string;
+  phoneQuery: string;
+  syncedAt: string | null;
+  now: number;
+}) {
+  const sections = nameSectionsFor(group.sources, fallbackName);
+  const people = sourcesInNameOrder(group.sources);
+  const color = nameColor(sections.find((s) => s.name)?.name || group.phoneNumber || group.key);
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950/40">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-3 py-2">
+        <span className="font-mono text-sm font-medium text-slate-100">
+          {group.phoneNumber ? (
+            <CopyPhoneButton phone={group.phoneNumber} phoneQuery={phoneQuery} />
+          ) : (
+            <span className="text-slate-600">—</span>
+          )}
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-300">
+          {people.length} {people.length === 1 ? "device" : "devices"}
+          <DeviceDots count={people.length} color={color} />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {sections.map((section) => {
+            const title = sectionTitle(section);
+            return (
+              <span
+                key={section.key}
+                className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 py-0.5 pr-2 pl-0.5 text-xs text-slate-100 ring-1 ring-slate-800"
+              >
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                  style={{ background: nameColor(title) }}
+                >
+                  {initialsOf(title)}
+                </span>
+                {highlightText(title, nameQuery)}
+                <span className="tabular-nums text-slate-500">{section.sources.length}</span>
+              </span>
+            );
+          })}
+        </div>
+        <span className="ml-auto shrink-0 text-sm text-slate-400">
+          <LastSynced iso={syncedAt} now={now} />
+        </span>
+      </div>
+      <ul className="grid grid-cols-1 md:grid-cols-2">
+        {people.map((s, i) => {
+          const savedAs = savedAsLabel(s);
+          const tone = nameColor(savedAs);
+          return (
+            <li
+              key={`${s.deviceId}-${s.employeeName}-${savedAs}-${i}`}
+              className="flex items-center gap-2.5 border-t border-slate-800/80 px-3 py-1.5 first:border-t-0 md:[&:nth-child(2)]:border-t-0"
+            >
+              <span className="h-7 w-0.5 shrink-0 rounded-full" style={{ background: tone }} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-slate-100">{s.employeeName || "—"}</div>
+                <div className="truncate font-mono text-[10px] leading-4 text-slate-500">
+                  {s.deviceId || "—"}
+                </div>
+              </div>
+              <div className="min-w-0 shrink text-right">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">saved as</div>
+                <div className="truncate text-sm font-medium text-slate-100">
+                  {highlightText(savedAs, nameQuery)}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * Memoized so an unrelated state change elsewhere (merge banner, insights
  * toggle, filter chip hover) doesn't force React to re-diff every visible
@@ -199,6 +409,70 @@ const ContactRow = memo(function ContactRow({
   phoneQuery: string;
   now: number;
 }) {
+  const groups = phoneGroupsOf(contact);
+  const sharedGroups = groups.filter((g) => g.shared);
+  if (sharedGroups.length > 0) {
+    const singleGroups = groups.filter((g) => !g.shared && (g.phoneNumber || g.sources.length > 0));
+    const color = nameColor(
+      sharedGroups[0]?.sources.find((s) => s.contactName?.trim())?.contactName ||
+        contact.contactName ||
+        contact.id
+    );
+    return (
+      <TableRow className="group animate-in fade-in slide-in-from-left-1 border-slate-800 duration-300 fill-mode-both hover:bg-slate-800/50">
+        <TableCell
+          colSpan={4}
+          className="border-l-2 align-top whitespace-normal transition-[border-color] duration-200 group-hover:border-l-4"
+          style={{ borderLeftColor: `${color}55` }}
+        >
+          <div className="space-y-3">
+            {sharedGroups.map((group, index) => (
+              <SharedPhoneBlock
+                key={group.key || group.phoneNumber}
+                group={group}
+                fallbackName={contact.contactName}
+                nameQuery={nameQuery}
+                phoneQuery={phoneQuery}
+                syncedAt={index === 0 ? contact.lastSyncedAt : null}
+                now={now}
+              />
+            ))}
+            {singleGroups.length > 0 && (
+              <div className="overflow-hidden rounded-xl border border-slate-800">
+                {singleGroups.map((group) => {
+                  const source = group.sources[0];
+                  const savedAs = source ? savedAsLabel(source) : contact.contactName || "—";
+                  return (
+                    <div
+                      key={group.key || group.phoneNumber}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-800 px-3 py-1.5 first:border-t-0"
+                    >
+                      <span className="font-mono text-sm text-slate-100">
+                        {group.phoneNumber ? (
+                          <CopyPhoneButton phone={group.phoneNumber} phoneQuery={phoneQuery} />
+                        ) : (
+                          "—"
+                        )}
+                      </span>
+                      <span className="text-sm text-slate-200">{source?.employeeName || "—"}</span>
+                      {source?.deviceId ? (
+                        <span className="font-mono text-[10px] text-slate-500">{source.deviceId}</span>
+                      ) : null}
+                      <span className="text-xs text-slate-500">
+                        saved as{" "}
+                        <span className="font-medium text-slate-100">{highlightText(savedAs, nameQuery)}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   const color = nameColor(contact.contactName || contact.id);
   return (
     <TableRow className="group animate-in fade-in slide-in-from-left-1 border-slate-800 duration-300 fill-mode-both hover:bg-slate-800/50">
@@ -207,13 +481,24 @@ const ContactRow = memo(function ContactRow({
         style={{ borderLeftColor: `${color}55` }}
       >
         <div className="space-y-1.5">
-          {contact.sources.map((s, si) => (
-            <div key={`${s.deviceId}-${si}`}>
-              {s.employeeName || "—"}
-              <br />
-              <span className="text-xs text-slate-500 font-mono">{s.deviceId}</span>
-            </div>
-          ))}
+          {contact.sources.map((s, si) => {
+            const savedAs = s.contactName?.trim() || "";
+            const showSavedAs =
+              savedAs &&
+              normalizeContactName(savedAs) !== normalizeContactName(contact.contactName);
+            return (
+              <div key={`${s.deviceId}-${si}`}>
+                {s.employeeName || "—"}
+                <br />
+                <span className="text-xs text-slate-500 font-mono">{s.deviceId}</span>
+                {showSavedAs ? (
+                  <div className="text-[11px] text-indigo-300">
+                    saved as {highlightText(savedAs, nameQuery)}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </TableCell>
       <TableCell className="text-slate-300 align-top">
@@ -301,7 +586,11 @@ export function ContactsTableClient({
       if (selectedUser !== "ALL" && !c.sources.some((s) => s.employeeName === selectedUser)) {
         return false;
       }
-      if (nameNorm && !normalizeContactName(c.contactName).includes(nameNorm)) {
+      if (
+        nameNorm &&
+        !normalizeContactName(c.contactName).includes(nameNorm) &&
+        !c.sources.some((s) => normalizeContactName(s.contactName).includes(nameNorm))
+      ) {
         return false;
       }
       if (phoneNorm && !c.phoneNumbers.some((p) => normalizePhoneDigits(p).includes(phoneNorm))) {

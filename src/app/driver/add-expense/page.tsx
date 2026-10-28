@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Camera, CheckCircle2, Image as ImageIcon, Loader2, MapPin, RotateCcw, X } from "lucide-react";
 import { EXPENSE_CATEGORIES, type ExpenseCategory } from "@/lib/expenseMath";
+import { formatKm } from "@/lib/incomeExpenseFormat";
 import { CATEGORY_STYLE, formatRupees } from "../WalletUI";
 
 type GpsState = "idle" | "warming" | "ready" | "denied" | "error";
@@ -16,6 +17,15 @@ interface SubmitResult {
   balance: number;
   excessAmount: number;
   duplicate: boolean;
+  runKm?: number | null;
+  odometerKm?: number | null;
+  vehicleRegistration?: string | null;
+}
+
+interface VehicleOption {
+  id: string;
+  registration: string;
+  odometerKm: number | null;
 }
 
 /** Works on plain-http LAN addresses too, where crypto.randomUUID is unavailable. */
@@ -78,6 +88,9 @@ export default function AddExpensePage() {
   const [photo, setPhoto] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
+  const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
+  const [vehicleId, setVehicleId] = useState("");
+  const [odometer, setOdometer] = useState("");
   const [gps, setGps] = useState<GpsState>("idle");
   const [fix, setFix] = useState<Fix | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -110,7 +123,14 @@ export default function AddExpensePage() {
     setExpenseDate(todayLocal());
     fetch("/api/driver/me/summary", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((s) => s && typeof s.walletBalance === "number" && setBalance(s.walletBalance))
+      .then((s) => {
+        if (!s) return;
+        if (typeof s.walletBalance === "number") setBalance(s.walletBalance);
+        if (Array.isArray(s.vehicles)) {
+          setVehicles(s.vehicles);
+          if (s.vehicles.length === 1) setVehicleId(s.vehicles[0].id);
+        }
+      })
       .catch(() => {});
     // Start location straight away when it is already allowed; otherwise wait for a tap.
     navigator.permissions
@@ -127,6 +147,15 @@ export default function AddExpensePage() {
 
   const amountNum = Number.parseFloat(amount);
   const validAmount = Number.isFinite(amountNum) && amountNum > 0;
+  const odometerNum = Number.parseFloat(odometer);
+  const selectedVehicle = vehicles.find((v) => v.id === vehicleId) ?? null;
+  const runPreview =
+    category === "Fuel" &&
+    selectedVehicle?.odometerKm != null &&
+    Number.isFinite(odometerNum) &&
+    odometerNum > selectedVehicle.odometerKm
+      ? Math.round((odometerNum - selectedVehicle.odometerKm) * 10) / 10
+      : null;
   const balanceAfter = balance !== null && validAmount ? Math.round((balance - amountNum) * 100) / 100 : null;
 
   function onAmountChange(v: string) {
@@ -151,6 +180,13 @@ export default function AddExpensePage() {
 
   async function submit() {
     if (!validAmount) return setError("Enter the amount you spent.");
+    if (category === "Fuel") {
+      if (!Number.isFinite(odometerNum) || odometerNum < 0) return setError("Enter the odometer reading in kilometers.");
+      if (vehicles.length > 1 && !vehicleId) return setError("Choose the vehicle.");
+      if (selectedVehicle?.odometerKm != null && odometerNum <= selectedVehicle.odometerKm) {
+        return setError(`Odometer must be higher than the last reading (${formatKm(selectedVehicle.odometerKm)}).`);
+      }
+    }
     if (!expenseDate) return setError("Choose the date of the expense.");
     if (!photo) return setError("Take a photo of the bill or receipt.");
     if (!bestFix.current) {
@@ -170,6 +206,9 @@ export default function AddExpensePage() {
       longitude: bestFix.current.lng,
       accuracy: bestFix.current.acc,
       clientRequestId: requestId.current,
+      ...(category === "Fuel"
+        ? { odometerKm: Math.round(odometerNum * 10) / 10, ...(vehicleId ? { vehicleId } : {}) }
+        : {}),
     });
 
     // Retry on dropped connections and server hiccups with the same request id.
@@ -211,6 +250,12 @@ export default function AddExpensePage() {
         <p className="mt-2 text-sm text-slate-300">
           {[category ?? "Other", description.trim()].filter(Boolean).join(" · ")}
         </p>
+        {done.runKm != null && (
+          <p className="mt-2 text-sm font-medium text-emerald-300">
+            {formatKm(done.runKm)} this run
+            {done.vehicleRegistration ? ` · ${done.vehicleRegistration}` : ""}
+          </p>
+        )}
         {done.duplicate && (
           <p className="mt-3 max-w-xs text-xs text-amber-300">
             This expense had already reached the server, so it was not deducted a second time.
@@ -334,6 +379,49 @@ export default function AddExpensePage() {
           })}
         </div>
       </div>
+
+      {category === "Fuel" && (
+        <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div>
+            <p className="text-sm font-medium text-slate-300">Odometer</p>
+            <p className="mt-0.5 text-xs text-slate-500">The reading on the vehicle at this petrol fill. The difference is the kilometers of the run.</p>
+          </div>
+          {vehicles.length > 1 && (
+            <select
+              value={vehicleId}
+              onChange={(e) => setVehicleId(e.target.value)}
+              className="h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-slate-100 focus:border-indigo-400 focus:outline-none"
+            >
+              <option value="">Choose vehicle</option>
+              {vehicles.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.registration}
+                  {v.odometerKm != null ? ` · ${formatKm(v.odometerKm)}` : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          {vehicles.length === 1 && (
+            <p className="text-sm text-slate-300">
+              {vehicles[0].registration}
+              {vehicles[0].odometerKm != null ? ` · last reading ${formatKm(vehicles[0].odometerKm)}` : ""}
+            </p>
+          )}
+          <input
+            inputMode="decimal"
+            value={odometer}
+            onChange={(e) => setOdometer(e.target.value.replace(/[^\d.]/g, ""))}
+            placeholder="Current reading (km)"
+            className="h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-slate-100 placeholder:text-slate-600 focus:border-indigo-400 focus:outline-none"
+          />
+          {selectedVehicle && selectedVehicle.odometerKm != null && vehicles.length !== 1 && (
+            <p className="text-xs text-slate-400">Last reading {formatKm(selectedVehicle.odometerKm)}</p>
+          )}
+          {runPreview != null && (
+            <p className="text-sm font-semibold text-emerald-400">This run {formatKm(runPreview)}</p>
+          )}
+        </div>
+      )}
 
       {/* Receipt */}
       <div>

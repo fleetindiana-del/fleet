@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { listExpenses } from "@/lib/expenseLedger";
 import {
   intParam,
+  optionalExpenseCategory,
   optionalExpenseStatus,
   optionalObjectId,
   withStaff,
@@ -10,7 +11,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/income-expense/expenses?status=pending|approved|rejected|all&driverId=&page=&limit=
+ * GET /api/income-expense/expenses?status=pending|approved|rejected|all&driverId=&category=&page=&limit=
  * Receipt images are NOT inlined; each item carries a `receiptUrl` to fetch on demand.
  */
 export async function GET(req: Request) {
@@ -20,6 +21,7 @@ export async function GET(req: Request) {
       companyId: scope,
       driverId: optionalObjectId(sp.get("driverId"), "driver"),
       status: optionalExpenseStatus(sp.get("status")),
+      category: optionalExpenseCategory(sp.get("category")),
       page: intParam(sp.get("page"), 1),
       limit: intParam(sp.get("limit"), 25),
     });

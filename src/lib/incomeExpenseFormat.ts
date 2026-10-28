@@ -13,6 +13,14 @@ export function formatINR(amount: number | null | undefined): string {
   return inr.format(n);
 }
 
+const kmFmt = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 1 });
+
+/** 12,450 km. A missing reading renders as an em dash. */
+export function formatKm(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `${kmFmt.format(value)} km`;
+}
+
 /**
  * Format a date-only value (expense date). It is stored as 00:00 UTC, so it
  * must be rendered in UTC or it would slip a day in negative-offset timezones.

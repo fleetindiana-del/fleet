@@ -220,6 +220,36 @@ export function balanceEffectFor(type: LedgerEntryType, amount: number, deducted
  * per-attempt id; without one, an identical receipt + amount + category is
  * treated as the same submission (an exact resend can only be a retry).
  */
+/** Sanity ceiling so a mistyped odometer cannot store an absurd reading. */
+export const MAX_ODOMETER_KM = 10_000_000;
+
+/**
+ * A vehicle odometer reading in kilometers. Accepts a JSON number or a numeric
+ * string, rounded to 0.1 km. Returns null when the value is missing or absurd.
+ */
+export function parseOdometer(value: unknown): number | null {
+  let n = value;
+  if (typeof n === "string") {
+    const trimmed = n.trim();
+    if (!trimmed) return null;
+    n = Number(trimmed);
+  }
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  const rounded = Math.round((n + Number.EPSILON) * 10) / 10;
+  if (rounded < 0 || rounded > MAX_ODOMETER_KM) return null;
+  return rounded;
+}
+
+/**
+ * Kilometers driven between two odometer readings. Null when there is no
+ * earlier reading, or the new reading does not move forward.
+ */
+export function runKilometers(previous: number | null | undefined, current: number): number | null {
+  if (typeof previous !== "number" || !Number.isFinite(previous) || !Number.isFinite(current)) return null;
+  const run = Math.round((current - previous) * 10) / 10;
+  return run > 0 ? run : null;
+}
+
 export function expenseSubmissionKey(
   clientRequestId: unknown,
   fingerprint: { amount: number; category: string; receiptBase64: string },

@@ -131,7 +131,8 @@ function pickCanonicalName(names: string[]): string {
 /**
  * Rebuilds the MergedContact collection from every raw Contact record: one
  * cluster per connected component of "same name" / "same phone" edges, with
- * every phone number and every contributing employee/device retained. Uses
+ * every phone number, the name each device saved it under, and every
+ * contributing employee/device retained. Uses
  * an upsert-by-clusterKey + mark-and-sweep delete so clusters that didn't
  * change between runs are untouched writes, not full rewrites.
  */
@@ -230,9 +231,10 @@ export async function runContactMerge(): Promise<{
           employeeName: it.employeeName || "Unknown",
           deviceId: it.deviceId || "",
           phoneNumber: it.phoneNumber || "",
+          contactName: (it.contactName || "").trim(),
           syncedAt: it.syncedAt,
         }))
-        .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+        .sort((a, b) => a.employeeName.localeCompare(b.employeeName) || a.contactName.localeCompare(b.contactName));
 
       let lastSyncedAt: Date | undefined;
       for (const it of items) {

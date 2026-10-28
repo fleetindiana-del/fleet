@@ -4,6 +4,8 @@ export interface IMergedContactSource {
   employeeName: string;
   deviceId: string;
   phoneNumber: string;
+  /** Name this employee saved on their device for this number. */
+  contactName: string;
   syncedAt?: Date;
 }
 
@@ -11,9 +13,9 @@ export interface IMergedContactSource {
  * The consolidated, de-duplicated view the Contact Bank page reads. Built by
  * src/lib/contactMerge.ts from the raw per-device `Contact` collection: every
  * raw contact that shares a normalized name OR a normalized phone number with
- * another ends up in the same cluster here, with every phone number and every
- * contributing employee/device retained (see IMergedContactSource) so nothing
- * is dropped by the merge.
+ * another ends up in the same cluster here, with every phone number, the name
+ * each employee saved it under, and every contributing employee/device retained
+ * (see IMergedContactSource) so nothing is dropped by the merge.
  */
 export interface IMergedContact extends Document {
   clusterKey: string;
@@ -45,6 +47,7 @@ const MergedContactSchema = new Schema(
         employeeName: { type: String, default: 'Unknown' },
         deviceId: { type: String, default: '' },
         phoneNumber: { type: String, default: '' },
+        contactName: { type: String, default: '' },
         syncedAt: { type: Date },
       },
     ],
@@ -61,6 +64,14 @@ const MergedContactSchema = new Schema(
 MergedContactSchema.index({ nameKey: 1 });
 MergedContactSchema.index({ phoneKeys: 1 });
 MergedContactSchema.index({ lastSyncedAt: -1 });
+
+// Re-register in dev so a schema change (like remembering the name each
+// employee saved) is not stuck behind the model compiled on first import.
+// Next keeps that compiled model for the life of the process, and mongoose
+// would otherwise drop the new field on write.
+if (process.env.NODE_ENV === "development" && mongoose.models.MergedContact) {
+  mongoose.deleteModel("MergedContact");
+}
 
 export default mongoose.models.MergedContact ||
   mongoose.model<IMergedContact>('MergedContact', MergedContactSchema);

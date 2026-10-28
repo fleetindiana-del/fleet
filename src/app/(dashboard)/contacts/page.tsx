@@ -13,7 +13,12 @@ type MergedContactLean = {
   _id: unknown;
   contactName: string;
   phoneNumbers?: string[];
-  sources?: Array<{ employeeName?: string; deviceId?: string; phoneNumber?: string }>;
+  sources?: Array<{
+    employeeName?: string;
+    deviceId?: string;
+    phoneNumber?: string;
+    contactName?: string;
+  }>;
   sourceCount?: number;
   lastSyncedAt?: Date;
 };
@@ -27,9 +32,14 @@ async function getContacts() {
   // Contacts should appear merged by default: if the merge job has never run
   // for this data (fresh sync, no admin has clicked "Re-merge now" yet), run
   // it inline instead of showing an empty Contact Bank until someone notices
-  // and clicks a button. Ongoing freshness after this is handled by
-  // maybeTriggerAutoMerge on every device sync (see src/lib/contactMerge.ts).
-  if (total === 0 && rawCount > 0) {
+  // and clicks a button. The same pass backfills the name each employee saved
+  // for a number — older clusters stored the device, but not that name.
+  // Ongoing freshness after this is handled by maybeTriggerAutoMerge on every
+  // device sync (see src/lib/contactMerge.ts).
+  const missingAssignedName = await MergedContact.exists({
+    sources: { $elemMatch: { contactName: { $exists: false } } },
+  });
+  if ((total === 0 && rawCount > 0) || (missingAssignedName && rawCount > 0)) {
     await runContactMerge();
     total = await MergedContact.countDocuments();
   }
@@ -47,6 +57,7 @@ async function getContacts() {
       employeeName: s.employeeName || "Unknown",
       deviceId: s.deviceId || "",
       phoneNumber: s.phoneNumber || "",
+      contactName: s.contactName || "",
     })),
     sourceCount: r.sourceCount ?? r.sources?.length ?? 0,
     lastSyncedAt: r.lastSyncedAt ? new Date(r.lastSyncedAt).toISOString() : null,

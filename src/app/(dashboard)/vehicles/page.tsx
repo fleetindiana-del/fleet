@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Plus, Car, X, Pencil, Trash2 } from "lucide-react";
+import { formatKm } from "@/lib/incomeExpenseFormat";
 
 interface Vehicle {
   _id: string;
@@ -21,14 +22,17 @@ interface Vehicle {
   make?: string;
   model?: string;
   status: "active" | "inactive";
+  odometerKm?: number | null;
+  lastRunKm?: number | null;
   createdAt: string;
 }
 
-const emptyForm: { registration: string; make: string; model: string; status: "active" | "inactive" } = {
+const emptyForm: { registration: string; make: string; model: string; status: "active" | "inactive"; odometer: string } = {
   registration: "",
   make: "",
   model: "",
   status: "active",
+  odometer: "",
 };
 
 export default function VehiclesPage() {
@@ -52,16 +56,42 @@ export default function VehiclesPage() {
   useEffect(() => { fetchVehicles(); }, [fetchVehicles]);
 
   const openCreate = () => { setEditVehicle(null); setForm(emptyForm); setError(""); setShowForm(true); };
-  const openEdit = (v: Vehicle) => { setEditVehicle(v); setForm({ registration: v.registration, make: v.make ?? "", model: v.model ?? "", status: v.status }); setError(""); setShowForm(true); };
+  const openEdit = (v: Vehicle) => {
+    setEditVehicle(v);
+    setForm({
+      registration: v.registration,
+      make: v.make ?? "",
+      model: v.model ?? "",
+      status: v.status,
+      odometer: typeof v.odometerKm === "number" ? String(v.odometerKm) : "",
+    });
+    setError("");
+    setShowForm(true);
+  };
   const closeForm = () => setShowForm(false);
 
   const handleSubmit = async () => {
     if (!form.registration.trim()) { setError("Registration is required"); return; }
+    const odometerKm = form.odometer.trim() === "" ? null : Number(form.odometer);
+    if (odometerKm !== null && (!Number.isFinite(odometerKm) || odometerKm < 0)) {
+      setError("Enter the odometer in kilometers.");
+      return;
+    }
     setIsSubmitting(true); setError("");
     try {
       const url = editVehicle ? `/api/vehicles/${editVehicle._id}` : "/api/vehicles";
       const method = editVehicle ? "PUT" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          registration: form.registration,
+          make: form.make,
+          model: form.model,
+          status: form.status,
+          odometerKm,
+        }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
       await fetchVehicles();
@@ -124,6 +154,17 @@ export default function VehiclesPage() {
                 </div>
               </div>
               <div className="space-y-1">
+                <label className="text-sm text-slate-300">Odometer (km)</label>
+                <Input
+                  inputMode="decimal"
+                  placeholder="e.g. 45210"
+                  value={form.odometer}
+                  onChange={(e) => setForm((f) => ({ ...f, odometer: e.target.value.replace(/[^\d.]/g, "") }))}
+                  className="bg-slate-950 border-slate-700 text-slate-200 placeholder:text-slate-600"
+                />
+                <p className="text-xs text-slate-500">A petrol expense moves this forward and records the kilometers of that run.</p>
+              </div>
+              <div className="space-y-1">
                 <label className="text-sm text-slate-300">Status</label>
                 <select
                   value={form.status}
@@ -165,6 +206,7 @@ export default function VehiclesPage() {
             <TableRow className="border-slate-800">
               <TableHead className="text-slate-400">Registration</TableHead>
               <TableHead className="text-slate-400">Make / Model</TableHead>
+              <TableHead className="text-slate-400">Odometer</TableHead>
               <TableHead className="text-slate-400">Status</TableHead>
               <TableHead className="text-slate-400 text-right">Actions</TableHead>
             </TableRow>
@@ -172,13 +214,13 @@ export default function VehiclesPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-32 text-center">
+                <TableCell colSpan={5} className="h-32 text-center">
                   <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-500" />
                 </TableCell>
               </TableRow>
             ) : vehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-32 text-center">
+                <TableCell colSpan={5} className="h-32 text-center">
                   <div className="flex flex-col items-center gap-2 text-slate-500">
                     <Car className="w-8 h-8" />
                     <p>No vehicles yet. Add your first vehicle.</p>
@@ -189,6 +231,12 @@ export default function VehiclesPage() {
               <TableRow key={v._id} className="border-slate-800 hover:bg-slate-800/40">
                 <TableCell className="font-mono font-semibold text-white">{v.registration}</TableCell>
                 <TableCell className="text-slate-300">{[v.make, v.model].filter(Boolean).join(" ") || <span className="text-slate-600">—</span>}</TableCell>
+                <TableCell>
+                  <div className="tabular-nums text-slate-100">{formatKm(v.odometerKm)}</div>
+                  {typeof v.lastRunKm === "number" && (
+                    <div className="text-xs text-emerald-400">Last run {formatKm(v.lastRunKm)}</div>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Badge variant="outline" className={v.status === "active" ? "border-emerald-500/50 text-emerald-400 bg-emerald-500/10" : "border-rose-500/50 text-rose-400 bg-rose-500/10"}>
                     {v.status}

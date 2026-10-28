@@ -8,8 +8,10 @@ import {
   expenseSubmissionKey,
   parseAmount,
   parseExpenseDate,
+  parseOdometer,
   parseReceiptDataUrl,
   round2,
+  runKilometers,
 } from "./expenseMath.ts";
 
 // --- The worked example from the requirements -------------------------------
@@ -233,6 +235,21 @@ test("parseReceiptDataUrl enforces the size cap", () => {
 });
 
 // --- Permissions ------------------------------------------------------------
+
+test("odometer readings are kilometers, and a run is the distance since the last one", () => {
+  assert.equal(parseOdometer(12345.64), 12345.6);
+  assert.equal(parseOdometer("10000"), 10000);
+  assert.equal(parseOdometer(0), 0);
+  assert.equal(parseOdometer(-1), null);
+  assert.equal(parseOdometer(""), null);
+  assert.equal(parseOdometer("abc"), null);
+
+  assert.equal(runKilometers(10000, 10180), 180);
+  assert.equal(runKilometers(10000.2, 10000.8), 0.6);
+  assert.equal(runKilometers(null, 500), null);
+  assert.equal(runKilometers(500, 500), null);
+  assert.equal(runKilometers(600, 500), null);
+});
 
 test("only HR and administrators can manage advances and approvals", () => {
   assert.equal(canManageIncomeExpense("hr"), true);

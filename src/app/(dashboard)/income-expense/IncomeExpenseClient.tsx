@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownLeft,
   Car,
-  Check,
   Fuel,
+  IndianRupee,
   Loader2,
   MapPin,
   Package,
@@ -15,17 +15,21 @@ import {
   RefreshCw,
   Search,
   UtensilsCrossed,
+  Wallet,
   Wrench,
-  X,
   type LucideIcon,
 } from "lucide-react";
-import { formatINR } from "@/lib/incomeExpenseFormat";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatDateOnly, formatDateTime, formatINR, formatKm } from "@/lib/incomeExpenseFormat";
+import { cn } from "@/lib/utils";
 import { api, type AccountRow, type ExpenseDTO, type LedgerEntryDTO, type Page, type SummaryResponse } from "./apiClient";
 import { AllocateAdvanceDialog } from "./AllocateAdvanceDialog";
 import { ReviewDialog } from "./ReviewDialog";
+import { DeleteTransactionDialog, EditTransactionDialog, type TransactionTarget } from "./TransactionDialogs";
 
 type FeedFilter = "all" | "pending" | "approved" | "rejected" | "advance";
-
 type TxnStatus = "pending" | "approved" | "rejected" | "advance";
 
 interface Txn {
@@ -42,9 +46,15 @@ interface Txn {
   expense?: ExpenseDTO;
   note?: string | null;
   balanceAfter: number | null;
+  ledgerId?: string;
 }
 
 const LIMIT = 30;
+
+/** Demo accounts created while testing. They stay in the database and stay off this page. */
+function isTestEmployee(name: string) {
+  return /test/i.test(name);
+}
 
 const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -54,14 +64,21 @@ const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "advance", label: "Money added" },
 ];
 
-const CATEGORY_ICON: Record<string, { icon: LucideIcon; bg: string; fg: string }> = {
-  Fuel: { icon: Fuel, bg: "#fce8e6", fg: "#c5221f" },
-  Toll: { icon: Car, bg: "#e8f0fe", fg: "#1a73e8" },
-  Food: { icon: UtensilsCrossed, bg: "#fce8f3", fg: "#c2185b" },
-  Parking: { icon: ParkingSquare, bg: "#f3e8fd", fg: "#7b1fa2" },
-  Maintenance: { icon: Wrench, bg: "#fef7e0", fg: "#e37400" },
-  Other: { icon: Package, bg: "#f1f3f4", fg: "#5f6368" },
-  Advance: { icon: ArrowDownLeft, bg: "#e6f4ea", fg: "#137333" },
+const CATEGORY_META: Record<string, { icon: LucideIcon; chip: string }> = {
+  Fuel: { icon: Fuel, chip: "border-rose-500/30 bg-rose-500/10 text-rose-300" },
+  Toll: { icon: Car, chip: "border-sky-500/30 bg-sky-500/10 text-sky-300" },
+  Food: { icon: UtensilsCrossed, chip: "border-pink-500/30 bg-pink-500/10 text-pink-300" },
+  Parking: { icon: ParkingSquare, chip: "border-violet-500/30 bg-violet-500/10 text-violet-300" },
+  Maintenance: { icon: Wrench, chip: "border-amber-500/30 bg-amber-500/10 text-amber-300" },
+  Other: { icon: Package, chip: "border-slate-600 bg-slate-800 text-slate-300" },
+  Advance: { icon: ArrowDownLeft, chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" },
+};
+
+const STATUS_CHIP: Record<TxnStatus, string> = {
+  pending: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  approved: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  rejected: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+  advance: "border-sky-500/30 bg-sky-500/10 text-sky-300",
 };
 
 const STATUS_LABEL: Record<TxnStatus, string> = {
@@ -71,42 +88,10 @@ const STATUS_LABEL: Record<TxnStatus, string> = {
   advance: "Money added",
 };
 
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  const letters = (parts[0]?.[0] ?? "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "");
-  return letters.toUpperCase();
-}
-
 function timeOf(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
-}
-
-function dayKey(d: Date) {
-  return d.toLocaleDateString("en-CA");
-}
-
-function dayLabel(iso: string, now = new Date()) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "Unknown date";
-  const k = dayKey(d);
-  if (k === dayKey(now)) return "Today";
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (k === dayKey(yesterday)) return "Yesterday";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-}
-
-function groupTxns(items: Txn[]) {
-  const groups: { label: string; items: Txn[] }[] = [];
-  for (const item of items) {
-    const label = dayLabel(item.at);
-    const last = groups[groups.length - 1];
-    if (!last || last.label !== label) groups.push({ label, items: [item] });
-    else last.items.push(item);
-  }
-  return groups;
 }
 
 function expenseTxn(e: ExpenseDTO): Txn {
@@ -140,6 +125,33 @@ function advanceTxn(e: LedgerEntryDTO): Txn {
     status: "advance",
     note: e.note,
     balanceAfter: e.balanceAfter,
+    ledgerId: e.id,
+  };
+}
+
+function targetFrom(txn: Txn): TransactionTarget {
+  if (txn.ledgerId) {
+    return {
+      kind: "advance",
+      id: txn.ledgerId,
+      driverName: txn.driverName,
+      amount: txn.amount,
+      note: txn.note ?? "",
+      category: "",
+      description: txn.title,
+    };
+  }
+  return {
+    kind: "expense",
+    id: txn.expense?.id ?? "",
+    driverName: txn.driverName,
+    amount: txn.amount,
+    note: "",
+    category: txn.category,
+    description: txn.expense?.description ?? txn.title,
+    odometerKm: txn.expense?.odometerKm ?? null,
+    previousOdometerKm: txn.expense?.previousOdometerKm ?? null,
+    vehicleRegistration: txn.expense?.vehicleRegistration ?? null,
   };
 }
 
@@ -180,16 +192,31 @@ async function fetchFeed(page: number, filter: FeedFilter, driverId: string | nu
   };
 }
 
-function Mark({ category }: { category: string }) {
-  const style = CATEGORY_ICON[category] ?? CATEGORY_ICON.Other;
-  const Icon = style.icon;
+function SpendLines({ approved, notApproved, total }: { approved: number; notApproved: number; total: number }) {
+  const items = [
+    { key: "A", title: "Approved", value: approved, tone: "text-[#3dcc6d]" },
+    { key: "N", title: "Not approved", value: notApproved, tone: "text-[#f05252]" },
+    { key: "T", title: "Total balance, including money added", value: total, tone: "text-white" },
+  ];
   return (
-    <span
-      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
-      style={{ backgroundColor: style.bg, color: style.fg }}
-    >
-      <Icon className="h-5 w-5" aria-hidden />
-    </span>
+    <div className="mt-1 flex items-center gap-2 overflow-hidden text-[11px] leading-4 font-medium whitespace-nowrap">
+      {items.map((item) => (
+        <span key={item.key} title={item.title} className={cn("tabular-nums", item.tone)}>
+          {item.key} {formatINR(item.value)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function TypeMark({ category }: { category: string }) {
+  const meta = CATEGORY_META[category] ?? CATEGORY_META.Other;
+  const Icon = meta.icon;
+  return (
+    <Badge variant="outline" className={cn("gap-1.5 px-2 py-0.5", meta.chip)}>
+      <Icon className="h-3 w-3" aria-hidden />
+      {category}
+    </Badge>
   );
 }
 
@@ -212,10 +239,11 @@ export default function IncomeExpenseClient() {
   const [feedLoading, setFeedLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [feedError, setFeedError] = useState("");
-  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const [allocateFor, setAllocateFor] = useState<string | undefined | null>(null);
   const [review, setReview] = useState<{ expense: ExpenseDTO; mode: "approve" | "reject" } | null>(null);
+  const [editTarget, setEditTarget] = useState<TransactionTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TransactionTarget | null>(null);
   const feedGen = useRef(0);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
@@ -245,7 +273,6 @@ export default function IncomeExpenseClient() {
     const gen = ++feedGen.current;
     setFeedLoading(true);
     setFeedError("");
-    setOpenKey(null);
     fetchFeed(1, filter, selectedId)
       .then((data) => {
         if (feedGen.current !== gen) return;
@@ -271,26 +298,44 @@ export default function IncomeExpenseClient() {
     [summary]
   );
 
-  const selected = selectedId ? driversById.get(selectedId) : undefined;
-  const totals = summary?.totals;
+  const roster = useMemo(
+    () => (summary?.drivers ?? []).filter((d) => !isTestEmployee(d.name)),
+    [summary]
+  );
+  const rosterTotals = useMemo(() => {
+    const sum = (pick: (row: AccountRow) => number) =>
+      Math.round(roster.reduce((total, row) => total + pick(row), 0) * 100) / 100;
+    return {
+      balance: sum((row) => row.balance),
+      approved: sum((row) => row.totalApproved),
+      pending: sum((row) => row.totalPending),
+      advance: sum((row) => row.totalAdvance),
+      excess: sum((row) => row.excessAmount),
+      pendingCount: roster.reduce((total, row) => total + row.pendingCount, 0),
+      count: roster.length,
+      drifted: roster.filter((row) => row.drifted).length,
+    };
+  }, [roster]);
 
-  const available = selected ? selected.balance : totals?.netBalance ?? 0;
-  const approved = selected ? selected.totalApproved : totals?.totalApproved ?? 0;
-  const toApprove = selected ? selected.totalPending : totals?.totalPending ?? 0;
+  const selected = selectedId ? roster.find((d) => d.driverId === selectedId) : undefined;
+
+  const available = selected ? selected.balance : rosterTotals.balance;
+  const excess = selected ? selected.excessAmount : rosterTotals.excess;
+  const pendingCount = selected ? selected.pendingCount : rosterTotals.pendingCount;
 
   const people = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (summary?.drivers ?? [])
-      .filter((d) => !q || d.name.toLowerCase().includes(q) || d.email.toLowerCase().includes(q))
+    return roster
+      .filter((d) => !q || d.name.toLowerCase().includes(q))
       .slice()
-      .sort((a, b) => b.pendingCount - a.pendingCount || a.name.localeCompare(b.name));
-  }, [summary, search]);
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [roster, search]);
 
   const txns = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const merged = [...expenses.map(expenseTxn), ...advances.map(advanceTxn)].sort(
-      (a, b) => Date.parse(b.at) - Date.parse(a.at) || a.key.localeCompare(b.key)
-    );
+    const merged = [...expenses.map(expenseTxn), ...advances.map(advanceTxn)]
+      .filter((t) => !isTestEmployee(t.driverName))
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || a.key.localeCompare(b.key));
     if (!q) return merged;
     return merged.filter((t) =>
       `${t.title} ${t.driverName} ${t.category} ${STATUS_LABEL[t.status]}`.toLowerCase().includes(q)
@@ -298,9 +343,11 @@ export default function IncomeExpenseClient() {
   }, [expenses, advances, search]);
 
   const hasMore =
-    filter === "advance"
-      ? page * LIMIT < advanceTotal
-      : page * LIMIT < expenseTotal || (filter === "all" && page * LIMIT < advanceTotal);
+    filter === "advance" ? page * LIMIT < advanceTotal : page * LIMIT < expenseTotal || (filter === "all" && page * LIMIT < advanceTotal);
+
+  function pickFilter(next: FeedFilter) {
+    setFilter(next);
+  }
 
   async function loadMore() {
     const next = page + 1;
@@ -322,293 +369,353 @@ export default function IncomeExpenseClient() {
     }
   }
 
+  const balanceNote = selected
+    ? excess > 0
+      ? "Payable to this employee"
+      : "Available to spend"
+    : excess > 0
+      ? `${formatINR(excess)} payable`
+      : `Across ${rosterTotals.count} ${rosterTotals.count === 1 ? "employee" : "employees"}`;
+
   return (
-    <div className="-m-4 min-h-full bg-[#f8f9fa] px-4 py-5 text-[#202124] sm:-m-6 sm:px-6 md:-m-8">
-      <div className="mx-auto max-w-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-[22px] font-medium tracking-tight">Expenses</h1>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-white">
+            <Wallet className="h-8 w-8 text-indigo-400" />
+            Expenses
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">{selected ? selected.name : "All employees"}</p>
+        </div>
+        <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-2.5">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
+            <IndianRupee className="h-5 w-5" aria-hidden />
+          </span>
+          <div>
+            <div className="text-xs text-slate-400">Available balance</div>
+            <div className={cn("text-xl font-bold tabular-nums", available < 0 ? "text-rose-400" : "text-white")}>
+              {summaryLoading && !summary ? "—" : formatINR(available)}
+            </div>
+            <div className="text-xs text-slate-500">{summaryLoading && !summary ? "Loading" : balanceNote}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={refresh}
-            className="rounded-full p-2 text-[#5f6368] hover:bg-[#e8eaed]"
-            aria-label="Refresh"
+            className="flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
           >
-            <RefreshCw className="h-5 w-5" />
+            <RefreshCw className={cn("h-4 w-4", (summaryLoading || feedLoading) && "animate-spin")} />
+            Refresh
           </button>
-        </div>
-
-        {notice && (
-          <div className="mb-3 flex items-start justify-between gap-3 rounded-2xl bg-[#e6f4ea] px-4 py-3 text-sm text-[#137333]">
-            <span>{notice}</span>
-            <button type="button" onClick={() => setNotice("")} aria-label="Dismiss" className="text-[#137333]">
-              ×
-            </button>
-          </div>
-        )}
-        {summaryError && (
-          <div className="mb-3 rounded-2xl bg-[#fce8e6] px-4 py-3 text-sm text-[#c5221f]">{summaryError}</div>
-        )}
-        {totals && totals.driftedCount > 0 && (
-          <div className="mb-3 rounded-2xl bg-[#fef7e0] px-4 py-3 text-sm text-[#b06000]">
-            {totals.driftedCount} driver {totals.driftedCount === 1 ? "balance does" : "balances do"} not match the
-            ledger. Figures here come from the ledger.
-          </div>
-        )}
-
-        <section className="overflow-hidden rounded-[28px] bg-gradient-to-br from-[#1a73e8] to-[#174ea6] p-6 text-white shadow-lg shadow-[#1a73e8]/20">
-          <p className="text-sm text-white/80">{selected ? selected.name : "Available balance"}</p>
-          <p className="mt-1 text-4xl font-medium tracking-tight tabular-nums">
-            {summaryLoading && !summary ? "—" : formatINR(available)}
-          </p>
-          <p className="mt-1 text-sm text-white/75">
-            {selected
-              ? selected.excessAmount > 0
-                ? "Overdrawn · payable to this driver"
-                : "Available to spend"
-              : totals && totals.totalExcess > 0
-                ? `Across ${totals.driverCount} drivers · ${formatINR(totals.totalExcess)} payable to overdrawn drivers`
-                : `Across ${totals?.driverCount ?? 0} ${(totals?.driverCount ?? 0) === 1 ? "driver" : "drivers"}`}
-          </p>
-          <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/20 pt-4">
-            <div>
-              <p className="text-xs text-white/70">Approved</p>
-              <p className="mt-0.5 text-lg font-medium tabular-nums">{summaryLoading && !summary ? "—" : formatINR(approved)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-white/70">To be approved</p>
-              <p className="mt-0.5 text-lg font-medium tabular-nums">{summaryLoading && !summary ? "—" : formatINR(toApprove)}</p>
-            </div>
-          </div>
           <button
             type="button"
             onClick={() => setAllocateFor(selectedId ?? undefined)}
-            className="mt-5 inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-medium text-[#1a73e8] hover:bg-[#e8f0fe]"
+            className="flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
           >
             <Plus className="h-4 w-4" />
             Add money
           </button>
-        </section>
-
-        <div className="relative mt-4">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5f6368]" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search transactions or drivers"
-            aria-label="Search transactions or drivers"
-            className="h-11 w-full rounded-full border-0 bg-white pl-10 pr-4 text-sm text-[#202124] shadow-sm outline-none ring-1 ring-[#dadce0] placeholder:text-[#80868b] focus:ring-2 focus:ring-[#1a73e8]"
-          />
         </div>
+      </div>
 
-        <div className="mt-4 flex gap-3 overflow-x-auto pb-1" aria-label="Drivers">
-          <button
-            type="button"
-            onClick={() => setSelectedId(null)}
-            aria-pressed={selectedId === null}
-            className="flex w-16 shrink-0 flex-col items-center gap-1"
-          >
-            <span
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-medium ${
-                selectedId === null ? "bg-[#1a73e8] text-white" : "bg-white text-[#1a73e8] ring-1 ring-[#dadce0]"
-              }`}
-            >
-              All
-            </span>
-            <span className="w-full truncate text-center text-[11px] text-[#5f6368]">Everyone</span>
+      {notice && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice("")} aria-label="Dismiss" className="text-emerald-300">
+            ×
           </button>
-          {people.map((d: AccountRow) => {
-            const on = selectedId === d.driverId;
-            return (
-              <button
-                key={d.driverId}
-                type="button"
-                onClick={() => setSelectedId(on ? null : d.driverId)}
-                aria-pressed={on}
-                className="flex w-16 shrink-0 flex-col items-center gap-1"
-                title={d.name}
-              >
-                <span
-                  className={`relative flex h-12 w-12 items-center justify-center rounded-full text-sm font-medium ${
-                    on ? "bg-[#1a73e8] text-white" : "bg-white text-[#1a73e8] ring-1 ring-[#dadce0]"
-                  }`}
-                >
-                  {initials(d.name)}
-                  {d.pendingCount > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e37400] px-1 text-[10px] font-medium text-white">
-                      {d.pendingCount}
-                    </span>
+        </div>
+      )}
+      {summaryError && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{summaryError}</div>
+      )}
+      {rosterTotals.drifted > 0 && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          {rosterTotals.drifted} employee {rosterTotals.drifted === 1 ? "balance does" : "balances do"} not match the
+          ledger. Figures here come from the ledger.
+        </div>
+      )}
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-500" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search employees or transactions"
+          aria-label="Search employees or transactions"
+          className="h-11 w-full rounded-lg border border-slate-700 bg-slate-950 pr-4 pl-10 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
+        />
+      </div>
+
+      <section aria-label="Employees">
+        <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="text-sm font-medium text-slate-300">Employees</h2>
+          <p className="text-[11px] text-slate-500">
+            <span className="text-[#3dcc6d]">A</span> approved
+            <span className="mx-1.5">·</span>
+            <span className="text-[#f05252]">N</span> not approved
+            <span className="mx-1.5">·</span>
+            <span className="text-white">T</span> total balance
+          </p>
+        </div>
+        {summaryLoading && !summary ? (
+          <div className="flex h-10 items-center">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+            {people.map((d: AccountRow) => {
+              const on = selectedId === d.driverId;
+              return (
+                <button
+                  key={d.driverId}
+                  type="button"
+                  onClick={() => setSelectedId(on ? null : d.driverId)}
+                  aria-pressed={on}
+                  className={cn(
+                    "rounded-xl border px-3 py-2 text-left transition-colors",
+                    on
+                      ? "border-indigo-500 bg-indigo-500/10"
+                      : "border-slate-800 bg-slate-900 hover:border-slate-600"
                   )}
-                </span>
-                <span className="w-full truncate text-center text-[11px] text-[#3c4043]">{d.name}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Transaction filter">
-          {FILTERS.map((f) => {
-            const on = filter === f.key;
-            const count = f.key === "pending" ? totals?.pendingCount ?? 0 : 0;
-            return (
-              <button
-                key={f.key}
-                type="button"
-                role="tab"
-                aria-selected={on}
-                onClick={() => setFilter(f.key)}
-                className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium ${
-                  on ? "bg-[#e8f0fe] text-[#1967d2]" : "bg-white text-[#3c4043] ring-1 ring-[#dadce0]"
-                }`}
-              >
-                {f.label}
-                {count > 0 && <span className="ml-1.5 text-xs">{count}</span>}
-              </button>
-            );
-          })}
-        </div>
-
-        <section className="mt-4" aria-label="Transactions">
-          {feedError && <p className="mb-2 text-sm text-[#c5221f]">{feedError}</p>}
-          {feedLoading ? (
-            <div className="flex h-40 items-center justify-center">
-              <Loader2 className="h-7 w-7 animate-spin text-[#1a73e8]" />
-            </div>
-          ) : txns.length === 0 ? (
-            <div className="rounded-3xl bg-white px-6 py-12 text-center shadow-sm">
-              <Receipt className="mx-auto h-8 w-8 text-[#dadce0]" />
-              <p className="mt-2 text-sm text-[#5f6368]">
-                {search.trim() ? "No transactions match that search." : "No transactions yet."}
+                >
+                  <div className="truncate text-sm font-medium text-white">{d.name}</div>
+                  <SpendLines approved={d.totalApproved} notApproved={d.totalPending} total={d.balance} />
+                </button>
+              );
+            })}
+            {!summaryLoading && people.length === 0 && (
+              <p className="px-1 py-1.5 text-sm text-slate-500">
+                {search.trim() ? "No employees match that search." : "No employees yet."}
               </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {groupTxns(txns).map((group) => (
-                <div key={group.label}>
-                  <h2 className="mb-1.5 px-1 text-xs font-medium uppercase tracking-wide text-[#5f6368]">{group.label}</h2>
-                  <ul className="overflow-hidden rounded-3xl bg-white shadow-sm">
-                    {group.items.map((txn, index) => {
-                      const open = openKey === txn.key;
-                      const pending = txn.status === "pending" && txn.expense;
-                      return (
-                        <li key={txn.key} className={index > 0 ? "border-t border-[#f1f3f4]" : ""}>
+            )}
+          </div>
+        )}
+      </section>
+
+      <Card className="border-slate-800 bg-slate-900">
+        <CardHeader className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-base text-slate-200">Transactions</CardTitle>
+            <p className="mt-1 text-xs text-slate-500">{selected ? selected.name : "All employees"}</p>
+          </div>
+          <div className="flex gap-2 overflow-x-auto" role="tablist" aria-label="Transaction filter">
+            {FILTERS.map((f) => {
+              const on = filter === f.key;
+              const count = f.key === "pending" ? pendingCount : 0;
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => pickFilter(f.key)}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors",
+                    on ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300 hover:text-white"
+                  )}
+                >
+                  {f.label}
+                  {count > 0 && <span className="ml-1.5">{count}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {feedError && <p className="px-4 pt-4 text-sm text-rose-300">{feedError}</p>}
+          <Table>
+            <TableHeader className="bg-slate-950/50">
+              <TableRow className="border-slate-800 hover:bg-transparent">
+                <TableHead className="px-4 text-slate-400">Employee</TableHead>
+                <TableHead className="px-4 text-slate-400">Type</TableHead>
+                <TableHead className="px-4 text-slate-400">Details</TableHead>
+                <TableHead className="px-4 text-slate-400">Date</TableHead>
+                <TableHead className="px-4 text-slate-400">Status</TableHead>
+                <TableHead className="px-4 text-right text-slate-400">Amount</TableHead>
+                <TableHead className="px-4 text-right text-slate-400">Balance</TableHead>
+                <TableHead className="px-4 text-right text-slate-400">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {feedLoading ? (
+                <TableRow className="border-slate-800">
+                  <TableCell colSpan={8} className="h-32 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
+                  </TableCell>
+                </TableRow>
+              ) : txns.length === 0 ? (
+                <TableRow className="border-slate-800">
+                  <TableCell colSpan={8} className="h-28 text-center text-slate-500">
+                    {search.trim() ? "No transactions match that search." : "No transactions in this view."}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                txns.map((txn) => {
+                  const pending = txn.status === "pending" && txn.expense;
+                  return (
+                    <TableRow key={txn.key} className="border-slate-800 align-top hover:bg-slate-800/30">
+                      <TableCell className="px-4 py-3 whitespace-normal">
+                        <div className="font-medium text-slate-100">{txn.driverName}</div>
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
+                        <TypeMark category={txn.category} />
+                      </TableCell>
+                      <TableCell className="max-w-xs px-4 py-3 whitespace-normal">
+                        <div className="text-sm text-slate-200">{txn.title}</div>
+                        {txn.expense?.runKm != null && (
+                          <p className="mt-1 text-xs font-medium text-emerald-400">
+                            {formatKm(txn.expense.runKm)} this run
+                            {txn.expense.vehicleRegistration ? ` · ${txn.expense.vehicleRegistration}` : ""}
+                            {txn.expense.previousOdometerKm != null && txn.expense.odometerKm != null
+                              ? ` · ${formatKm(txn.expense.previousOdometerKm)} → ${formatKm(txn.expense.odometerKm)}`
+                              : ""}
+                          </p>
+                        )}
+                        {txn.expense?.runKm == null && txn.expense?.odometerKm != null && (
+                          <p className="mt-1 text-xs text-slate-400">Odometer {formatKm(txn.expense.odometerKm)}</p>
+                        )}
+                        {txn.expense?.status === "rejected" && txn.expense.rejectionReason && (
+                          <p className="mt-1 text-xs text-rose-300">Rejected: {txn.expense.rejectionReason}</p>
+                        )}
+                        {txn.expense?.reviewedByName && (
+                          <p className="mt-1 text-xs text-slate-500">Reviewed by {txn.expense.reviewedByName}</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-4 py-3 whitespace-normal text-slate-400">
+                        {txn.expense ? (
+                          <>
+                            <div>{formatDateOnly(txn.expense.expenseDate)}</div>
+                            <div className="text-xs text-slate-500">{timeOf(txn.at)}</div>
+                          </>
+                        ) : (
+                          formatDateTime(txn.at)
+                        )}
+                      </TableCell>
+                      <TableCell className="px-4 py-3">
+                        <Badge variant="outline" className={STATUS_CHIP[txn.status]}>
+                          {STATUS_LABEL[txn.status]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "px-4 py-3 text-right font-medium tabular-nums",
+                          txn.credit ? "text-emerald-400" : "text-slate-100",
+                          txn.struck && "text-slate-500 line-through"
+                        )}
+                      >
+                        {txn.credit ? "+" : "−"}
+                        {formatINR(txn.amount)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "px-4 py-3 text-right tabular-nums",
+                          txn.balanceAfter !== null && txn.balanceAfter < 0 ? "text-rose-400" : "text-slate-400"
+                        )}
+                      >
+                        {txn.balanceAfter === null ? "—" : formatINR(txn.balanceAfter)}
+                      </TableCell>
+                      <TableCell className="px-4 py-3 whitespace-normal">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setOpenKey(open ? null : txn.key)}
-                            aria-expanded={open}
-                            className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[#f8f9fa]"
+                            onClick={() => setEditTarget(targetFrom(txn))}
+                            className="rounded-md bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-100 hover:bg-slate-700"
                           >
-                            <Mark category={txn.category} />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[15px] font-medium text-[#202124]">{txn.title}</span>
-                              <span className="mt-0.5 block truncate text-xs text-[#5f6368]">
-                                {txn.driverName} · {timeOf(txn.at)}
-                                {txn.status !== "advance" ? ` · ${STATUS_LABEL[txn.status]}` : ""}
-                              </span>
-                            </span>
-                            <span className="shrink-0 text-right">
-                              <span
-                                className={`block text-[15px] font-medium tabular-nums ${
-                                  txn.credit ? "text-[#137333]" : "text-[#202124]"
-                                } ${txn.struck ? "line-through text-[#80868b]" : ""}`}
-                              >
-                                {txn.credit ? "+" : "−"}
-                                {formatINR(txn.amount)}
-                              </span>
-                              {txn.balanceAfter !== null && (
-                                <span
-                                  className={`mt-0.5 block text-[11px] tabular-nums ${
-                                    txn.balanceAfter < 0 ? "text-[#c5221f]" : "text-[#80868b]"
-                                  }`}
-                                >
-                                  Bal {formatINR(txn.balanceAfter)}
-                                </span>
-                              )}
-                            </span>
+                            Edit
                           </button>
-                          {open && (
-                            <div className="space-y-3 bg-[#f8f9fa] px-4 py-3 text-sm text-[#3c4043]">
-                              <p>
-                                {txn.category}
-                                {txn.status === "advance" && txn.note ? ` · ${txn.note}` : ""}
-                              </p>
-                              {txn.expense?.status === "rejected" && txn.expense.rejectionReason && (
-                                <p className="text-[#c5221f]">Rejected: {txn.expense.rejectionReason}</p>
-                              )}
-                              {txn.expense && (
-                                <div className="flex flex-wrap items-center gap-3">
-                                  <a
-                                    href={txn.expense.receiptUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center gap-1 text-[#1a73e8]"
-                                  >
-                                    <Receipt className="h-4 w-4" />
-                                    Receipt
-                                  </a>
-                                  {txn.expense.location && (
-                                    <a
-                                      href={`https://maps.google.com/?q=${txn.expense.location.lat},${txn.expense.location.lng}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="inline-flex items-center gap-1 text-[#1a73e8]"
-                                    >
-                                      <MapPin className="h-4 w-4" />
-                                      Location
-                                    </a>
-                                  )}
-                                </div>
-                              )}
-                              {pending && (
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => setReview({ expense: txn.expense!, mode: "approve" })}
-                                    className="inline-flex items-center gap-1 rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-medium text-white hover:bg-[#174ea6]"
-                                  >
-                                    <Check className="h-4 w-4" />
-                                    Approve
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setReview({ expense: txn.expense!, mode: "reject" })}
-                                    className="inline-flex items-center gap-1 rounded-full px-4 py-1.5 text-sm font-medium text-[#c5221f] hover:bg-[#fce8e6]"
-                                  >
-                                    <X className="h-4 w-4" />
-                                    Decline
-                                  </button>
-                                </div>
-                              )}
-                            </div>
+                          <button
+                            type="button"
+                            disabled={!pending}
+                            title={pending ? "Approve this expense" : "Only an expense waiting for approval can be approved"}
+                            onClick={() => pending && setReview({ expense: txn.expense!, mode: "approve" })}
+                            className="rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(targetFrom(txn))}
+                            className="rounded-md bg-rose-500/15 px-2 py-1 text-[11px] font-medium text-rose-300 hover:bg-rose-500/25"
+                          >
+                            Delete
+                          </button>
+                          {txn.expense && (
+                            <a
+                              href={txn.expense.receiptUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-1 text-[11px] text-indigo-300 hover:text-indigo-200"
+                            >
+                              <Receipt className="h-3.5 w-3.5" />
+                            </a>
                           )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-              {hasMore && !search.trim() && (
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="flex w-full items-center justify-center gap-2 py-2 text-sm font-medium text-[#1a73e8] disabled:opacity-60"
-                >
-                  {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Show older transactions
-                </button>
+                          {txn.expense?.location && (
+                            <a
+                              href={`https://maps.google.com/?q=${txn.expense.location.lat},${txn.expense.location.lng}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-1 text-indigo-300 hover:text-indigo-200"
+                            >
+                              <MapPin className="h-3.5 w-3.5" />
+                            </a>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
+            </TableBody>
+          </Table>
+          {hasMore && !search.trim() && !feedLoading && (
+            <div className="border-t border-slate-800 px-4 py-3">
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="flex items-center gap-2 text-sm font-medium text-indigo-300 disabled:opacity-60"
+              >
+                {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+                Show older transactions
+              </button>
             </div>
           )}
-        </section>
-      </div>
+        </CardContent>
+      </Card>
 
       {allocateFor !== null && (
         <AllocateAdvanceDialog
-          drivers={summary?.drivers ?? []}
+          drivers={roster}
           initialDriverId={allocateFor}
           onClose={() => setAllocateFor(null)}
           onDone={(msg) => {
             setAllocateFor(null);
+            setNotice(msg);
+            refresh();
+          }}
+        />
+      )}
+
+      {editTarget && (
+        <EditTransactionDialog
+          target={editTarget}
+          onClose={() => setEditTarget(null)}
+          onDone={(msg) => {
+            setEditTarget(null);
+            setNotice(msg);
+            refresh();
+          }}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteTransactionDialog
+          target={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDone={(msg) => {
+            setDeleteTarget(null);
             setNotice(msg);
             refresh();
           }}

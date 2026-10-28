@@ -87,7 +87,12 @@ type MergedContactLean = {
   _id: unknown;
   contactName: string;
   phoneNumbers?: string[];
-  sources?: Array<{ employeeName?: string; deviceId?: string; phoneNumber?: string }>;
+  sources?: Array<{
+    employeeName?: string;
+    deviceId?: string;
+    phoneNumber?: string;
+    contactName?: string;
+  }>;
   sourceCount?: number;
   lastSyncedAt?: Date;
 };
@@ -122,6 +127,7 @@ export async function GET(req: Request) {
         or.push({ nameKey: new RegExp(escapeRegex(nameQ)) });
         or.push({ contactName: new RegExp(escapeRegex(q), "i") });
         or.push({ "sources.employeeName": new RegExp(escapeRegex(q), "i") });
+        or.push({ "sources.contactName": new RegExp(escapeRegex(q), "i") });
       }
       if (digitsQ) {
         or.push({ phoneKeys: new RegExp(escapeRegex(digitsQ)) });
@@ -148,6 +154,7 @@ export async function GET(req: Request) {
           employeeName: s.employeeName || "Unknown",
           deviceId: s.deviceId || "",
           phoneNumber: s.phoneNumber || "",
+          contactName: s.contactName || "",
         })),
         sourceCount: r.sourceCount ?? r.sources?.length ?? 0,
         lastSyncedAt: r.lastSyncedAt ? new Date(r.lastSyncedAt).toISOString() : null,

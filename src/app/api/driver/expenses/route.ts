@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/driver/expenses
  *   { amount, category, description, expenseDate: "YYYY-MM-DD", photoBase64,
- *     latitude, longitude, accuracy?, clientRequestId? }
+ *     latitude, longitude, accuracy?, clientRequestId?,
+ *     odometerKm?, vehicleId? }  // required when category is Fuel
  *
  * Drivers only; the driver is always the signed-in user, never taken from the
  * body. The amount is deducted from the wallet immediately (the balance may go
@@ -42,6 +43,8 @@ export async function POST(req: Request) {
       longitude: body.longitude,
       accuracy: body.accuracy,
       clientRequestId: body.clientRequestId,
+      odometerKm: body.odometerKm,
+      vehicleId: body.vehicleId,
     });
 
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });

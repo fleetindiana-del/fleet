@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import Driver from "@/models/Driver";
+import Vehicle from "@/models/Vehicle";
 import { getDriverAccount, listExpenses } from "@/lib/expenseLedger";
 
 export const dynamic = "force-dynamic";
@@ -31,9 +32,13 @@ export async function GET() {
     }
     const driverId = String(driver._id);
 
-    const [account, recent] = await Promise.all([
+    const [account, recent, vehicles] = await Promise.all([
       getDriverAccount(driverId),
       listExpenses({ driverId, limit: 10 }),
+      Vehicle.find({ companyId: driver.companyId, status: "active" })
+        .select("registration odometerKm")
+        .sort({ registration: 1 })
+        .lean(),
     ]);
 
     return NextResponse.json({
@@ -48,6 +53,11 @@ export async function GET() {
         balance: account.balance,
         excessAmount: account.excessAmount,
       },
+      vehicles: vehicles.map((v) => ({
+        id: String(v._id),
+        registration: v.registration,
+        odometerKm: typeof v.odometerKm === "number" ? v.odometerKm : null,
+      })),
       recentExpenses: recent.items.map((e) => ({
         _id: e.id,
         amount: e.amount,

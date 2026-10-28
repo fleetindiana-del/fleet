@@ -8,7 +8,8 @@ function expense(id: string, amount: number, at: string, over: Partial<ExpenseDT
     id, driverId: "d1", driverName: "Asha", amount, category: "Fuel", description: `Diesel ${id}`,
     expenseDate: at, submittedAt: at, status: "pending", reviewedByName: null, reviewedAt: null,
     rejectionReason: null, excessAmount: 0, balanceAfterApproval: null, deductedOnSubmit: true,
-    walletBalanceAfter: null, location: null, receiptUrl: `/r/${id}`, ...over,
+    walletBalanceAfter: null, location: null, receiptUrl: `/r/${id}`,
+    odometerKm: null, previousOdometerKm: null, runKm: null, vehicleRegistration: null, ...over,
   };
 }
 

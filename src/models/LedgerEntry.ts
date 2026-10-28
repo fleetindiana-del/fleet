@@ -5,9 +5,9 @@ import { LEDGER_ENTRY_TYPES, type LedgerEntryType } from "@/lib/expenseMath";
  * Append-only record of everything that happens to a driver's account.
  *
  * Every advance, expense submission, approval and rejection is one entry, with
- * who did it and when. Entries are never edited or deleted; a correction is a
- * new entry. The driver's balance is the sum of `balanceEffect` over their
- * entries, so any figure on screen can be traced back to rows here.
+ * who did it and when. The driver's balance is the sum of `balanceEffect` over
+ * their entries. Staff can correct or remove an entry from the expenses page;
+ * that rewrites the row and rebuilds every later balance snapshot.
  */
 export interface ILedgerEntry extends Document {
   driverId: mongoose.Types.ObjectId;
