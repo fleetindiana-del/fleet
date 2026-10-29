@@ -625,8 +625,12 @@ export default function IncomeExpenseClient() {
                         {txn.expense?.status === "rejected" && txn.expense.rejectionReason && (
                           <p className="mt-1 text-xs text-rose-300">Rejected: {txn.expense.rejectionReason}</p>
                         )}
-                        {txn.expense?.reviewedByName && (
-                          <p className="mt-1 text-xs text-slate-500">Reviewed by {txn.expense.reviewedByName}</p>
+                        {txn.expense && txn.expense.status !== "pending" && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            {txn.expense.status === "approved" ? "Approved" : "Rejected"} by{" "}
+                            {txn.expense.reviewedByName ?? "—"}
+                            {txn.expense.reviewedAt ? ` · ${formatDateTime(txn.expense.reviewedAt)}` : ""}
+                          </p>
                         )}
                       </TableCell>
                       <TableCell className="px-4 py-3 whitespace-normal text-slate-400">

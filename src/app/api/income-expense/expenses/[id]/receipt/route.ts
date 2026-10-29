@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 import connectToDatabase from "@/lib/db";
 import Driver, { type IDriver } from "@/models/Driver";
 import Expense, { type IExpense } from "@/models/Expense";
-import { companyScopeFor } from "@/lib/expenseLedger";
+import { companyScopeFor, type Actor } from "@/lib/expenseLedger";
+import { driverFromDeviceToken } from "@/lib/deviceDriverAuth";
 import { canManageIncomeExpense, isServableReceiptMime } from "@/lib/expenseMath";
 import { errorResponse, getSessionActor } from "@/lib/incomeExpenseApi";
 
@@ -12,12 +13,17 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/income-expense/expenses/:id/receipt
  * Streams the stored bill/receipt image. Allowed for HR/admin of the same
- * company and for the driver who submitted the expense; anyone else gets 404
+ * company and for the driver who submitted the expense (website session or the
+ * phone's device token); anyone else gets 404
  * (not 403) so expense ids cannot be probed.
  */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const actor = await getSessionActor();
+    const actor: Actor = await getSessionActor().catch(async (e) => {
+      const device = await driverFromDeviceToken(req);
+      if (!device) throw e;
+      return { id: device.userId, name: device.userName, role: "driver" };
+    });
     const { id } = await params;
     const notFound = () => NextResponse.json({ error: "Receipt not found" }, { status: 404 });
     if (!mongoose.Types.ObjectId.isValid(id)) return notFound();

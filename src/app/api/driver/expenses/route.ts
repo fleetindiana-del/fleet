@@ -1,12 +1,46 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
-import { submitExpense } from "@/lib/expenseLedger";
+import Driver from "@/models/Driver";
+import { listExpenses, submitExpense } from "@/lib/expenseLedger";
 import { errorResponse, readJson } from "@/lib/incomeExpenseApi";
-import { driverFromDeviceToken } from "@/lib/deviceDriverAuth";
+import { signedInDriver } from "@/lib/deviceDriverAuth";
 
 export const dynamic = "force-dynamic";
+
+const STATUSES = ["pending", "approved", "rejected"] as const;
+
+/**
+ * GET /api/driver/expenses?page=1&limit=20&status=pending|approved|rejected
+ *
+ * The signed-in driver's own expense history, newest first, with the review
+ * (who approved or rejected it, and when), vehicle, odometer and location.
+ * `receiptUrl` serves the bill photo to this same driver.
+ */
+export async function GET(req: Request) {
+  try {
+    const driverUser = await signedInDriver(req);
+    if (!driverUser) {
+      return NextResponse.json({ error: "Unauthorized. Strict Driver Access." }, { status: 401 });
+    }
+    await connectToDatabase();
+    const driver = await Driver.findOne({ userId: driverUser.userId }).select("_id").lean();
+    if (!driver) {
+      return NextResponse.json({ error: "Driver profile not found" }, { status: 404 });
+    }
+
+    const params = new URL(req.url).searchParams;
+    const status = STATUSES.find((s) => s === params.get("status"));
+    const result = await listExpenses({
+      driverId: String(driver._id),
+      status,
+      page: Number(params.get("page")) || 1,
+      limit: Number(params.get("limit")) || 20,
+    });
+    return NextResponse.json(result);
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
 
 /**
  * POST /api/driver/expenses
@@ -28,14 +62,8 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const device = session?.user?.role === "driver" ? null : await driverFromDeviceToken(req);
-    const userId = session?.user?.role === "driver" ? session.user.id : device?.userId;
-    const userName =
-      session?.user?.role === "driver"
-        ? session.user.name || session.user.email || "Driver"
-        : device?.userName;
-    if (!userId || !userName) {
+    const driverUser = await signedInDriver(req);
+    if (!driverUser) {
       return NextResponse.json({ error: "Unauthorized. Strict Driver Access." }, { status: 401 });
     }
 
@@ -43,8 +71,8 @@ export async function POST(req: Request) {
     await connectToDatabase();
 
     const result = await submitExpense({
-      userId,
-      userName,
+      userId: driverUser.userId,
+      userName: driverUser.userName,
       amount: body.amount,
       category: body.category,
       description: body.description,

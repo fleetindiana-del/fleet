@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import User from "@/models/User";
 import Driver from "@/models/Driver";
@@ -35,4 +37,13 @@ export async function driverFromDeviceToken(req: Request): Promise<DeviceDriver 
   if (user.capabilities && user.capabilities.expenseManagement === false) return null;
 
   return { userId: String(user._id), userName: user.name || "Driver" };
+}
+
+/** The driver behind a website driver session, else behind the phone's device token. */
+export async function signedInDriver(req: Request): Promise<DeviceDriver | null> {
+  const session = await getServerSession(authOptions);
+  if (session?.user?.role === "driver" && session.user.id) {
+    return { userId: session.user.id, userName: session.user.name || session.user.email || "Driver" };
+  }
+  return driverFromDeviceToken(req);
 }
