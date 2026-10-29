@@ -569,6 +569,7 @@ export default function UsersPage() {
             <div className="space-y-2">
                <label className="text-sm font-medium text-slate-300">New Password (Optional)</label>
                <Input type="password" value={editFormData.password} onChange={e => setEditFormData({...editFormData, password: e.target.value})} className="bg-slate-950 border-slate-700 text-white" placeholder="Leave blank to keep current" />
+               <p className="text-xs text-slate-500">The phone asks for this name and password the next time the app is opened.</p>
             </div>
             <div className="space-y-2">
                <label className="text-sm font-medium text-slate-300">Role</label>

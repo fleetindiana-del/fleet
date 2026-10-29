@@ -20,8 +20,9 @@ import LedgerEntry from "@/models/LedgerEntry";
 import Vehicle from "@/models/Vehicle";
 // Legacy collection: only read, to detect drivers who still need migrating.
 import WalletTransaction from "@/models/WalletTransaction";
+import { findExpenseType } from "@/lib/expenseTypes";
+import type { ExpenseTypeDTO } from "@/lib/expenseTypeRules";
 import {
-  EXPENSE_CATEGORIES,
   balanceEffectFor,
   buildAccountFigures,
   computeExcess,
@@ -33,7 +34,6 @@ import {
   round2,
   runKilometers,
   type AccountFigures,
-  type ExpenseCategory,
   type LedgerEntryType,
 } from "@/lib/expenseMath";
 
@@ -462,6 +462,10 @@ export interface ExpenseDTO {
   /** Wallet balance right after this expense was deducted, whenever that happened. */
   walletBalanceAfter: number | null;
   location: { lat: number; lng: number } | null;
+  locationAccuracy: number | null;
+  /** "captured", or why there is no location. Legacy rows always had one. */
+  locationStatus: "captured" | "denied" | "unavailable";
+  locationCapturedAt: string | null;
   receiptUrl: string;
   /** False only when the driver submitted without a bill photo (a petrol fill). */
   hasReceipt?: boolean;
@@ -469,6 +473,7 @@ export interface ExpenseDTO {
   odometerKm: number | null;
   previousOdometerKm: number | null;
   runKm: number | null;
+  vehicleId: string | null;
   vehicleRegistration: string | null;
 }
 
@@ -538,11 +543,15 @@ interface ExpenseRow {
   excessAmount?: number;
   walletBalanceAfter?: number;
   deductedOnSubmit?: boolean;
-  location?: { lat: number; lng: number };
+  location?: { lat?: number; lng?: number } | null;
+  locationAccuracy?: number;
+  locationStatus?: "captured" | "denied" | "unavailable";
+  locationCapturedAt?: Date;
   hasReceipt?: boolean;
   odometerKm?: number;
   previousOdometerKm?: number;
   runKm?: number;
+  vehicleId?: unknown;
   vehicleRegistration?: string;
 }
 
@@ -574,6 +583,12 @@ interface DriverRow {
 
 function toExpenseDTO(e: ExpenseRow): ExpenseDTO {
   const driverUser = e.driverId?.userId;
+  const lat = e.location?.lat;
+  const lng = e.location?.lng;
+  const location =
+    typeof lat === "number" && typeof lng === "number" && Number.isFinite(lat) && Number.isFinite(lng)
+      ? { lat, lng }
+      : null;
   return {
     id: String(e._id),
     driverId: String(e.driverId?._id),
@@ -592,12 +607,16 @@ function toExpenseDTO(e: ExpenseRow): ExpenseDTO {
     balanceAfterApproval: e.status === "approved" ? e.walletBalanceAfter ?? null : null,
     deductedOnSubmit: !!e.deductedOnSubmit,
     walletBalanceAfter: e.walletBalanceAfter ?? null,
-    location: e.location ? { lat: e.location.lat, lng: e.location.lng } : null,
+    location,
+    locationAccuracy: location && typeof e.locationAccuracy === "number" ? e.locationAccuracy : null,
+    locationStatus: location ? "captured" : e.locationStatus === "denied" ? "denied" : "unavailable",
+    locationCapturedAt: location && e.locationCapturedAt ? new Date(e.locationCapturedAt).toISOString() : null,
     receiptUrl: receiptUrlFor(String(e._id)),
     hasReceipt: e.hasReceipt !== false,
     odometerKm: typeof e.odometerKm === "number" ? e.odometerKm : null,
     previousOdometerKm: typeof e.previousOdometerKm === "number" ? e.previousOdometerKm : null,
     runKm: typeof e.runKm === "number" ? e.runKm : null,
+    vehicleId: e.vehicleId ? String(e.vehicleId) : null,
     vehicleRegistration: e.vehicleRegistration ?? null,
   };
 }
@@ -785,14 +804,22 @@ export async function updateExpense(input: {
     if (parsed === null) throw new LedgerError(400, "INVALID_AMOUNT", "Enter a valid positive amount.");
     amount = parsed;
   }
-  let category: ExpenseCategory | undefined;
+  let requestedCategory: string | undefined;
   if (input.category !== undefined && input.category !== "") {
-    if (typeof input.category !== "string" || !(EXPENSE_CATEGORIES as readonly string[]).includes(input.category)) {
-      throw new LedgerError(400, "INVALID_CATEGORY", "Choose an expense category.");
-    }
-    category = input.category as ExpenseCategory;
+    if (typeof input.category !== "string") throw new LedgerError(400, "INVALID_CATEGORY", "Choose an expense category.");
+    requestedCategory = input.category;
   }
   const description = input.description === undefined ? undefined : (cleanText(input.description, 500) ?? "");
+
+  const target = await ExpenseM.findById(expenseId).select("companyId category").lean();
+  if (!target) throw new LedgerError(404, "EXPENSE_NOT_FOUND", "Expense not found.");
+  assertCompany(target.companyId, scope);
+  let category: string | undefined;
+  if (requestedCategory && requestedCategory !== target.category) {
+    const type = await findExpenseType(target.companyId, requestedCategory);
+    if (!type) throw new LedgerError(400, "INVALID_CATEGORY", "Choose an expense category.");
+    category = type.code;
+  }
 
   return inTransaction(async (session) => {
     const expense = await ExpenseM.findById(expenseId).session(session);
@@ -892,8 +919,62 @@ export interface SubmitExpenseInput {
   clientRequestId?: unknown;
   /** Required for a Fuel expense: the odometer at the pump, in kilometers. */
   odometerKm?: unknown;
-  /** Vehicle this petrol fill belongs to. Required when the company has more than one. */
+  /** Vehicle the expense is for, when its type asks for one. */
   vehicleId?: unknown;
+  /** Why there is no fix: "denied" (permission refused) or "unavailable". */
+  locationStatus?: unknown;
+  /** Epoch ms when the phone took the fix (at the bill photo when there is one). */
+  locationTakenAt?: unknown;
+}
+
+/**
+ * A usable GPS fix from the request, or null when the phone sent none.
+ * Coordinates that are present but impossible are refused rather than dropped.
+ */
+function parseLocationFix(input: SubmitExpenseInput): { lat: number; lng: number; at?: Date } | null {
+  const lat = input.latitude;
+  const lng = input.longitude;
+  if (lat == null && lng == null) return null;
+  if (
+    typeof lat !== "number" || typeof lng !== "number" ||
+    !Number.isFinite(lat) || !Number.isFinite(lng) ||
+    Math.abs(lat) > 90 || Math.abs(lng) > 180 ||
+    (lat === 0 && lng === 0)
+  ) {
+    throw new LedgerError(400, "INVALID_LOCATION", "The location from the phone is not valid. Try again.");
+  }
+  let at: Date | undefined;
+  if (typeof input.locationTakenAt === "number" && Number.isFinite(input.locationTakenAt)) {
+    const t = new Date(input.locationTakenAt);
+    // A phone clock far off is ignored rather than trusted.
+    if (Math.abs(Date.now() - t.getTime()) < 2 * 24 * 60 * 60 * 1000) at = t;
+  }
+  return { lat, lng, at };
+}
+
+/** Vehicle details for a non-fuel expense whose type takes a vehicle. */
+async function attachVehicle(
+  session: mongoose.ClientSession,
+  companyId: mongoose.Types.ObjectId,
+  type: ExpenseTypeDTO,
+  vehicleId: string | undefined
+): Promise<{ vehicleId: mongoose.Types.ObjectId; vehicleRegistration?: string } | null> {
+  if (type.vehicle === "none") return null;
+  if (!vehicleId) {
+    if (type.vehicle === "required") {
+      throw new LedgerError(400, "VEHICLE_REQUIRED", `Choose the vehicle for this ${type.name} expense.`);
+    }
+    return null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(vehicleId)) throw new LedgerError(400, "INVALID_VEHICLE", "Choose a vehicle.");
+  const vehicle = await VehicleM.findById(vehicleId).select("companyId registration vehicleModel").session(session).lean();
+  if (!vehicle || String(vehicle.companyId) !== String(companyId)) {
+    throw new LedgerError(404, "VEHICLE_NOT_FOUND", "That vehicle is not in this company.");
+  }
+  return {
+    vehicleId: vehicle._id,
+    vehicleRegistration: vehicle.vehicleModel?.trim() || vehicle.registration,
+  };
 }
 
 export interface SubmitExpenseResult {
@@ -910,6 +991,7 @@ export interface SubmitExpenseResult {
   runKm?: number | null;
   odometerKm?: number | null;
   vehicleRegistration?: string | null;
+  locationStatus?: "captured" | "denied" | "unavailable";
 }
 
 const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -924,13 +1006,20 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
   const amount = parseAmount(input.amount);
   if (amount === null) throw new LedgerError(400, "INVALID_AMOUNT", "Enter a valid positive amount.");
 
-  // Category and description are optional for the driver; an unrecognised category is still refused.
+  const userId = toObjectId(input.userId, "user");
+  const driverRef = await DriverM.findOne({ userId }).select("_id companyId").lean();
+  if (!driverRef) throw new LedgerError(404, "DRIVER_NOT_FOUND", "Driver profile not found.");
+
   const category = input.category == null || input.category === "" ? "Other" : input.category;
-  if (typeof category !== "string" || !(EXPENSE_CATEGORIES as readonly string[]).includes(category)) {
-    throw new LedgerError(400, "INVALID_CATEGORY", "Choose an expense category.");
+  const type = typeof category === "string" ? await findExpenseType(driverRef.companyId, category) : null;
+  if (!type || !type.active) {
+    throw new LedgerError(400, "INVALID_CATEGORY", "Choose an expense type from the list.");
   }
 
   const description = cleanText(input.description, 500);
+  if (type.requiresDescription && !description) {
+    throw new LedgerError(400, "DESCRIPTION_REQUIRED", `Say what this ${type.name} expense was for.`);
+  }
 
   const expenseDate = parseExpenseDate(input.expenseDate);
   if (!expenseDate) {
@@ -942,45 +1031,37 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
   if (photoSent && !receipt) {
     throw new LedgerError(400, "RECEIPT_REQUIRED", "Attach a clear photo of the bill or receipt (JPEG, PNG or WebP, up to 5 MB).");
   }
-  if (!receipt && category !== "Fuel") {
+  if (!receipt && type.requiresReceipt) {
     throw new LedgerError(400, "RECEIPT_REQUIRED", "Attach a clear photo of the bill or receipt (JPEG, PNG or WebP, up to 5 MB).");
   }
 
-  const lat = input.latitude;
-  const lng = input.longitude;
-  if (
-    typeof lat !== "number" || typeof lng !== "number" ||
-    !Number.isFinite(lat) || !Number.isFinite(lng) ||
-    Math.abs(lat) > 90 || Math.abs(lng) > 180
-  ) {
-    throw new LedgerError(400, "LOCATION_REQUIRED", "A GPS location is required.");
-  }
-  const accuracy = typeof input.accuracy === "number" && Number.isFinite(input.accuracy) ? input.accuracy : undefined;
+  const fix = parseLocationFix(input);
+  const accuracy = fix && typeof input.accuracy === "number" && Number.isFinite(input.accuracy) && input.accuracy >= 0
+    ? input.accuracy
+    : undefined;
 
   let odometerKm: number | undefined;
-  let vehicleId: string | undefined;
-  if (category === "Fuel") {
+  const vehicleId =
+    type.vehicle !== "none" && typeof input.vehicleId === "string" && input.vehicleId.trim()
+      ? input.vehicleId.trim()
+      : undefined;
+  if (type.tracksOdometer) {
     const parsed = parseOdometer(input.odometerKm);
     if (parsed === null) {
-      throw new LedgerError(400, "ODOMETER_REQUIRED", "Enter the odometer reading in kilometers for this petrol fill.");
+      throw new LedgerError(400, "ODOMETER_REQUIRED", "Enter the odometer reading in kilometers for this fuel fill.");
     }
     odometerKm = parsed;
-    if (typeof input.vehicleId === "string" && input.vehicleId.trim()) vehicleId = input.vehicleId.trim();
   }
 
-  const userId = toObjectId(input.userId, "user");
   const submissionKey = expenseSubmissionKey(
     input.clientRequestId,
-    { amount, category, receiptBase64: receipt?.base64 ?? "" },
+    { amount, category: type.code, receiptBase64: receipt?.base64 ?? "" },
     sha256Hex
   );
 
-  const driverRef = await DriverM.findOne({ userId }).select("_id").lean();
-  if (!driverRef) throw new LedgerError(404, "DRIVER_NOT_FOUND", "Driver profile not found.");
-
   const findPrevious = async (): Promise<SubmitExpenseResult | null> => {
     const prev = await ExpenseM.findOne({ driverId: driverRef._id, submissionKey })
-      .select("amount status walletBalanceAfter excessAmount runKm odometerKm vehicleRegistration")
+      .select("amount status walletBalanceAfter excessAmount runKm odometerKm vehicleRegistration locationStatus")
       .lean();
     if (!prev) return null;
     return {
@@ -993,6 +1074,7 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
       runKm: asKm(prev.runKm),
       odometerKm: asKm(prev.odometerKm),
       vehicleRegistration: prev.vehicleRegistration ?? null,
+      locationStatus: prev.locationStatus ?? "captured",
     };
   };
 
@@ -1019,7 +1101,7 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
 
       const now = new Date();
       const fuel =
-        category === "Fuel" && odometerKm != null
+        type.tracksOdometer && odometerKm != null
           ? await stampFuelOdometer(session, {
               driverId: driver._id,
               companyId: driver.companyId,
@@ -1027,19 +1109,27 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
               vehicleId,
             })
           : null;
+      const vehicle = fuel ? null : await attachVehicle(session, driver.companyId, type, vehicleId);
       const [expense] = await ExpenseM.create(
         [
           {
             driverId: driver._id,
             companyId: driver.companyId,
             amount,
-            category,
+            category: type.code,
             description: description || undefined,
             expenseDate,
             ...(receipt ? { photoUrl: `data:${receipt.mime};base64,${receipt.base64}` } : {}),
             hasReceipt: !!receipt,
-            location: { lat, lng },
-            locationAccuracy: accuracy,
+            ...(fix
+              ? {
+                  location: { lat: fix.lat, lng: fix.lng },
+                  locationAccuracy: accuracy,
+                  locationStatus: "captured",
+                  locationCapturedAt: fix.at ?? now,
+                }
+              : { locationStatus: input.locationStatus === "denied" ? "denied" : "unavailable" }),
+            ...(vehicle ?? {}),
             timestamp: now,
             status: "pending",
             deductedOnSubmit: true,
@@ -1082,7 +1172,8 @@ export async function submitExpense(input: SubmitExpenseInput): Promise<SubmitEx
         duplicate: false,
         runKm: fuel?.runKm ?? null,
         odometerKm: fuel?.odometerKm ?? null,
-        vehicleRegistration: fuel?.vehicleRegistration ?? null,
+        vehicleRegistration: fuel?.vehicleRegistration ?? vehicle?.vehicleRegistration ?? null,
+        locationStatus: fix ? ("captured" as const) : input.locationStatus === "denied" ? ("denied" as const) : ("unavailable" as const),
       };
     });
   } catch (e) {
@@ -1459,7 +1550,7 @@ export interface ExpenseQuery extends PageOpts {
   companyId?: string | null;
   driverId?: string;
   status?: "pending" | "approved" | "rejected";
-  category?: ExpenseCategory;
+  category?: string;
 }
 
 export async function listExpenses(q: ExpenseQuery) {

@@ -264,6 +264,41 @@ export default function IncomeExpenseClient() {
     };
   }, [refreshKey]);
 
+  // Live view: pick up expenses sent from the phone and balance changes without
+  // a manual Refresh. Paused while a dialog is open or older pages are loaded,
+  // so nothing moves under the cursor.
+  const dialogOpen = review !== null || editTarget !== null || deleteTarget !== null || allocateFor !== null;
+  useEffect(() => {
+    if (dialogOpen || page !== 1) return;
+    let busy = false;
+    const tick = () => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      const gen = feedGen.current;
+      Promise.all([api<SummaryResponse>("/api/income-expense/summary"), fetchFeed(1, filter, selectedId)])
+        .then(([s, data]) => {
+          setSummary(s);
+          setSummaryError("");
+          if (feedGen.current !== gen) return;
+          setExpenses(data.expenses);
+          setAdvances(data.advances);
+          setExpenseTotal(data.expenseTotal);
+          setAdvanceTotal(data.advanceTotal);
+        })
+        .catch(() => {})
+        .finally(() => {
+          busy = false;
+        });
+    };
+    const id = window.setInterval(tick, 10_000);
+    const onVisible = () => document.visibilityState === "visible" && tick();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [dialogOpen, page, filter, selectedId]);
+
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 8000);

@@ -5,6 +5,8 @@ import connectToDatabase from "@/lib/db";
 import Driver from "@/models/Driver";
 import Vehicle from "@/models/Vehicle";
 import { getDriverAccount, listExpenses } from "@/lib/expenseLedger";
+import { listExpenseTypes } from "@/lib/expenseTypes";
+import { driverFromDeviceToken } from "@/lib/deviceDriverAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,28 +19,31 @@ export const dynamic = "force-dynamic";
  * timestamp/walletBalanceAfter` keep their original names for existing clients;
  * `account` and the extra expense fields are additive.
  */
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user || session.user.role !== "driver") {
+    const device = session?.user?.role === "driver" ? null : await driverFromDeviceToken(req);
+    const userId = session?.user?.role === "driver" ? session.user.id : device?.userId;
+    if (!userId) {
       return NextResponse.json({ error: "Forbidden. Driver access only." }, { status: 403 });
     }
 
     await connectToDatabase();
 
-    const driver = await Driver.findOne({ userId: session.user.id }).lean();
+    const driver = await Driver.findOne({ userId }).lean();
     if (!driver) {
       return NextResponse.json({ error: "Driver profile not found" }, { status: 404 });
     }
     const driverId = String(driver._id);
 
-    const [account, recent, vehicles] = await Promise.all([
+    const [account, recent, vehicles, expenseTypes] = await Promise.all([
       getDriverAccount(driverId),
       listExpenses({ driverId, limit: 10 }),
       Vehicle.find({ companyId: driver.companyId, status: "active" })
         .select("registration make vehicleModel odometerKm")
         .sort({ vehicleModel: 1, registration: 1 })
         .lean(),
+      listExpenseTypes(driver.companyId, { activeOnly: true }),
     ]);
 
     return NextResponse.json({
@@ -59,6 +64,14 @@ export async function GET() {
         make: v.make ?? null,
         model: v.vehicleModel ?? null,
         odometerKm: typeof v.odometerKm === "number" ? v.odometerKm : null,
+      })),
+      expenseTypes: expenseTypes.map((t) => ({
+        code: t.code,
+        name: t.name,
+        requiresReceipt: t.requiresReceipt,
+        requiresDescription: t.requiresDescription,
+        vehicle: t.vehicle,
+        tracksOdometer: t.tracksOdometer,
       })),
       recentExpenses: recent.items.map((e) => ({
         _id: e.id,

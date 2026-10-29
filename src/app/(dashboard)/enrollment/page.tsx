@@ -582,7 +582,7 @@ export default function EnrollmentPage() {
                   Call Logs
                 </label>
                 <p className="text-xs text-slate-500">
-                  Access changes are also applied to this person&apos;s sign-in account. They apply the next time the driver signs in on the phone.
+                  A new name or password is what the phone asks for the next time the app is opened.
                 </p>
               </div>
 

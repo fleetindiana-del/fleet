@@ -11,8 +11,8 @@ export default function LiveMapPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const fetchExpenses = useCallback(async () => {
-    setIsLoading(true);
+  const fetchExpenses = useCallback(async (quiet = false) => {
+    if (!quiet) setIsLoading(true);
     setError("");
     try {
       const res = await fetch("/api/live-map", { cache: "no-store" });
@@ -32,6 +32,11 @@ export default function LiveMapPage() {
 
   useEffect(() => {
     fetchExpenses();
+    // New expenses from the phone appear on the map without a manual Refresh.
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") fetchExpenses(true);
+    }, 15_000);
+    return () => window.clearInterval(id);
   }, [fetchExpenses]);
 
   const truncated = total > expenses.length;
@@ -47,7 +52,7 @@ export default function LiveMapPage() {
           </p>
         </div>
         <button
-          onClick={fetchExpenses}
+          onClick={() => fetchExpenses()}
           className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-4 py-2 text-slate-100 transition-colors hover:bg-slate-700"
         >
           {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

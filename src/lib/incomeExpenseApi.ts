@@ -5,7 +5,7 @@ import mongoose from "mongoose";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import { LedgerError, companyScopeFor, type Actor } from "@/lib/expenseLedger";
-import { canManageIncomeExpense, EXPENSE_CATEGORIES, LEDGER_ENTRY_TYPES, type ExpenseCategory, type LedgerEntryType } from "@/lib/expenseMath";
+import { canManageIncomeExpense, LEDGER_ENTRY_TYPES, type LedgerEntryType } from "@/lib/expenseMath";
 
 export function errorResponse(e: unknown): NextResponse {
   if (e instanceof LedgerError) {
@@ -82,12 +82,14 @@ export function optionalLedgerType(value: string | null): LedgerEntryType | unde
   return value as LedgerEntryType;
 }
 
-export function optionalExpenseCategory(value: string | null): ExpenseCategory | undefined {
+/** Categories are Expense Type Master codes, so any short code is a valid filter. */
+export function optionalExpenseCategory(value: string | null): string | undefined {
   if (!value) return undefined;
-  if (!(EXPENSE_CATEGORIES as readonly string[]).includes(value)) {
+  const code = value.trim();
+  if (!code || code.length > 60) {
     throw new LedgerError(400, "INVALID_CATEGORY", "Unknown expense category.");
   }
-  return value as ExpenseCategory;
+  return code;
 }
 
 export function optionalExpenseStatus(value: string | null) {

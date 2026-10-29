@@ -4,8 +4,10 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import User from "@/models/User";
 import Driver from "@/models/Driver";
+import EnrollmentCode from "@/models/EnrollmentCode";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
+import { revokeDeviceSignIns, usernameAfterRename } from "@/lib/deviceSession";
 
 /**
  * Device capabilities for this user — what the Android app may do once they sign
@@ -189,25 +191,49 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const previousName = String(userToUpdate.name || "");
+    const previousUsername = String(userToUpdate.username || "");
+    const previousEmail = String(userToUpdate.email || "");
+    let signInChanged = false;
+
     // Check email collisions
     if (email && email !== userToUpdate.email) {
       const emailCollision = await User.findOne({ email });
       if (emailCollision) return NextResponse.json({ error: "Email is already taken" }, { status: 400 });
       userToUpdate.email = email;
+      signInChanged = true;
     }
 
-    // Check username collisions
-    if (username !== undefined && username !== userToUpdate.username) {
-      if (username) {
-        const usernameCollision = await User.findOne({ username });
+    const nextName = typeof name === "string" && name.trim() ? name.trim() : previousName;
+    const nextUsername = usernameAfterRename({
+      previousName,
+      previousUsername,
+      nextName,
+      submittedUsername: username === undefined ? undefined : String(username),
+    });
+
+    if (nextUsername !== previousUsername) {
+      if (nextUsername) {
+        const usernameCollision = await User.findOne({
+          username: nextUsername,
+          _id: { $ne: userToUpdate._id },
+        });
         if (usernameCollision) return NextResponse.json({ error: "Username is already taken" }, { status: 400 });
-        userToUpdate.username = username;
+        userToUpdate.username = nextUsername;
       } else {
-        userToUpdate.username = undefined; // Allow clearing username
+        userToUpdate.username = undefined;
+      }
+      signInChanged = true;
+    }
+
+    if (nextName && nextName !== previousName) {
+      userToUpdate.name = nextName;
+      signInChanged = true;
+      const driver = await Driver.findOne({ userId: userToUpdate._id }).select("_id");
+      if (driver) {
+        await EnrollmentCode.updateMany({ driverId: driver._id }, { $set: { employeeName: nextName } });
       }
     }
-
-    if (name) userToUpdate.name = name;
 
     // Department assignment is optional; allow clearing with empty string / null
     if (departmentId !== undefined) {
@@ -232,9 +258,10 @@ export async function PUT(req: Request) {
       }
     }
 
-    // Update password optionally
+    // Update password optionally. The phone reads this hash on its next sign-in.
     if (password && password.trim() !== '') {
       userToUpdate.passwordHash = await bcrypt.hash(password, 10);
+      signInChanged = true;
     }
 
     // Device capabilities. Only touched when the client actually sends them, so
@@ -248,6 +275,9 @@ export async function PUT(req: Request) {
     }
 
     await userToUpdate.save();
+    if (signInChanged || previousEmail !== String(userToUpdate.email || "")) {
+      await revokeDeviceSignIns(userToUpdate._id);
+    }
     return NextResponse.json({ success: true });
 
   } catch (error) {

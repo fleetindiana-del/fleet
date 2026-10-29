@@ -1,11 +1,13 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { EXPENSE_CATEGORIES, type ExpenseCategory } from '@/lib/expenseMath';
+
+export type LocationStatus = 'captured' | 'denied' | 'unavailable';
 
 export interface IExpense extends Document {
   driverId: mongoose.Types.ObjectId;
   companyId: mongoose.Types.ObjectId;
   amount: number;
-  category: ExpenseCategory;
+  /** Code of an ExpenseType in the same company. */
+  category: string;
   /** What was bought / where the money was spent. Required for new expenses. */
   description?: string;
   /** Legacy free-text note, written before `description` existed. */
@@ -13,11 +15,15 @@ export interface IExpense extends Document {
   /** Calendar date the money was spent (00:00 UTC). Legacy rows fall back to `timestamp`. */
   expenseDate?: Date;
   photoUrl: string;
-  location: {
+  /** Unset when the driver refused location or the phone had no fix. */
+  location?: {
     lat: number;
     lng: number;
   };
   locationAccuracy?: number;
+  locationStatus?: LocationStatus;
+  /** When the phone took the fix: at the bill photo when there is one. */
+  locationCapturedAt?: Date;
   /** When the driver submitted the expense. */
   timestamp: Date;
   status: 'pending' | 'approved' | 'rejected';
@@ -53,17 +59,19 @@ const ExpenseSchema = new Schema(
     driverId: { type: Schema.Types.ObjectId, ref: 'Driver', required: true },
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
     amount: { type: Number, required: true },
-    category: { type: String, enum: EXPENSE_CATEGORIES, required: true },
+    category: { type: String, required: true, trim: true, maxlength: 60 },
     description: { type: String, trim: true, maxlength: 500 },
     note: { type: String },
     expenseDate: { type: Date },
     photoUrl: { type: String }, // base64 data URL; served via the receipt endpoint. Petrol fills may omit it.
     hasReceipt: { type: Boolean },
     location: {
-      lat: { type: Number, required: true },
-      lng: { type: Number, required: true },
+      type: new Schema({ lat: { type: Number, required: true }, lng: { type: Number, required: true } }, { _id: false }),
+      required: false,
     },
     locationAccuracy: { type: Number },
+    locationStatus: { type: String, enum: ['captured', 'denied', 'unavailable'] },
+    locationCapturedAt: { type: Date },
     timestamp: { type: Date, required: true },
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     adminApprovalBy: { type: Schema.Types.ObjectId, ref: 'User' },

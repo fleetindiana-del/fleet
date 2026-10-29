@@ -9,6 +9,7 @@ import Department from "@/models/Department";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import crypto from "crypto";
+import { revokeDeviceSignIns, usernameAfterRename } from "@/lib/deviceSession";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -272,8 +273,9 @@ export async function POST(req: Request) {
  * Access is synced to the person's sign-in account when the code has one, because
  * that account is what the phone checks at sign-in — editing the code alone would
  * show "Expenses" on this page while the app still refuses. A username/password
- * sent for a code that has no account yet creates one, like POST does. The phone
- * picks changes up at its next sign-in.
+ * sent for a code that has no account yet creates one, like POST does. A new
+ * name, username, or password replaces the phone's saved sign-in, so the next
+ * time the app opens it asks for the details just saved here.
  */
 export async function PUT(req: Request) {
   try {
@@ -349,19 +351,38 @@ export async function PUT(req: Request) {
     }
 
     let newDriverId: mongoose.Types.ObjectId | undefined;
+    let signInChanged = false;
     if (linkedUser) {
-      if (loginUsername && loginUsername !== linkedUser.username) {
-        const taken = await User.findOne({ username: loginUsername, _id: { $ne: linkedUser._id } });
+      const previousName = String(linkedUser.name || "");
+      const previousUsername = String(linkedUser.username || "");
+      const nextName = employeeName.trim();
+      const nextUsername = usernameAfterRename({
+        previousName,
+        previousUsername,
+        nextName,
+        submittedUsername: loginUsername,
+      });
+
+      if (nextUsername && nextUsername !== previousUsername) {
+        const taken = await User.findOne({ username: nextUsername, _id: { $ne: linkedUser._id } });
         if (taken) {
           return NextResponse.json({ error: "Username is already taken" }, { status: 400 });
         }
-        linkedUser.username = loginUsername;
+        linkedUser.username = nextUsername;
+        signInChanged = true;
       }
-      if (loginPassword) linkedUser.passwordHash = await bcrypt.hash(loginPassword, 10);
-      linkedUser.name = employeeName.trim();
+      if (loginPassword) {
+        linkedUser.passwordHash = await bcrypt.hash(loginPassword, 10);
+        signInChanged = true;
+      }
+      if (nextName !== previousName) {
+        linkedUser.name = nextName;
+        signInChanged = true;
+      }
       linkedUser.departmentId = departmentObjId;
       linkedUser.capabilities = caps;
       await linkedUser.save();
+      if (signInChanged) await revokeDeviceSignIns(linkedUser._id);
     } else if (loginUsername || loginPassword) {
       if (!loginUsername || !loginPassword) {
         return NextResponse.json({ error: "Username and password are both required to create a sign-in" }, { status: 400 });

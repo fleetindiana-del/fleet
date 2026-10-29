@@ -4,17 +4,22 @@ import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import { submitExpense } from "@/lib/expenseLedger";
 import { errorResponse, readJson } from "@/lib/incomeExpenseApi";
+import { driverFromDeviceToken } from "@/lib/deviceDriverAuth";
 
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/driver/expenses
  *   { amount, category, description, expenseDate: "YYYY-MM-DD", photoBase64,
- *     latitude, longitude, accuracy?, clientRequestId?,
- *     odometerKm?, vehicleId? }  // required when category is Fuel
+ *     latitude?, longitude?, accuracy?, locationTakenAt?, locationStatus?,
+ *     clientRequestId?, odometerKm?, vehicleId? }
  *
- * Drivers only; the driver is always the signed-in user, never taken from the
- * body. The amount is deducted from the wallet immediately (the balance may go
+ * `category` is an Expense Type Master code; that type decides which of the
+ * receipt, description, vehicle and odometer are required. Without a GPS fix
+ * the expense is still saved, with `locationStatus` "denied" or "unavailable".
+ *
+ * Drivers only (web session or the phone's device token); the driver is
+ * always the signed-in user, never taken from the body. The amount is deducted from the wallet immediately (the balance may go
  * negative) and the expense waits as PENDING for HR/admin review; a rejection
  * refunds it (see reviewExpense).
  *
@@ -24,7 +29,13 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id || session.user.role !== "driver") {
+    const device = session?.user?.role === "driver" ? null : await driverFromDeviceToken(req);
+    const userId = session?.user?.role === "driver" ? session.user.id : device?.userId;
+    const userName =
+      session?.user?.role === "driver"
+        ? session.user.name || session.user.email || "Driver"
+        : device?.userName;
+    if (!userId || !userName) {
       return NextResponse.json({ error: "Unauthorized. Strict Driver Access." }, { status: 401 });
     }
 
@@ -32,8 +43,8 @@ export async function POST(req: Request) {
     await connectToDatabase();
 
     const result = await submitExpense({
-      userId: session.user.id,
-      userName: session.user.name || session.user.email || "Driver",
+      userId,
+      userName,
       amount: body.amount,
       category: body.category,
       description: body.description,
@@ -45,6 +56,8 @@ export async function POST(req: Request) {
       clientRequestId: body.clientRequestId,
       odometerKm: body.odometerKm,
       vehicleId: body.vehicleId,
+      locationStatus: body.locationStatus,
+      locationTakenAt: body.locationTakenAt,
     });
 
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });
