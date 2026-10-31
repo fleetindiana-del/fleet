@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { canManageIncomeExpense } from "@/lib/expenseMath";
+import { getShiftTimezone } from "@/lib/shiftConfig";
 import IncomeExpenseClient from "../income-expense/IncomeExpenseClient";
 
 export const dynamic = "force-dynamic";
@@ -16,5 +17,5 @@ export default async function ExpensesPage() {
     );
   }
 
-  return <IncomeExpenseClient />;
+  return <IncomeExpenseClient timeZone={getShiftTimezone()} />;
 }

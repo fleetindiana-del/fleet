@@ -1,0 +1,53 @@
+/* Leaflet's tiles and div-icons are images/divs. Tailwind's preflight sets
+   img { max-width: 100% }, which squashes every tile into a sliver. */
+.leaflet-container .leaflet-tile,
+.leaflet-container .leaflet-marker-icon,
+.leaflet-container .leaflet-marker-shadow {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: #e6e4df;
+  font-family: inherit;
+  z-index: 0;
+  outline: none;
+}
+
+.leaflet-div-icon.fleet-marker,
+.leaflet-div-icon.fleet-arrow {
+  background: transparent !important;
+  border: none !important;
+}
+
+.leaflet-div-icon.fleet-marker {
+  overflow: visible !important;
+  cursor: pointer;
+}
+
+.leaflet-div-icon.fleet-arrow {
+  pointer-events: none !important;
+}
+
+.leaflet-popup.fleet-popup .leaflet-popup-content-wrapper {
+  border-radius: 12px;
+}
+
+.leaflet-popup.fleet-popup .leaflet-popup-content {
+  margin: 10px 12px;
+  font-family: inherit;
+}
+
+.leaflet-popup.fleet-popup .leaflet-popup-content img {
+  max-width: 100% !important;
+  max-height: 7rem !important;
+  width: 100%;
+  object-fit: contain;
+}
+
+.leaflet-bottom.leaflet-right {
+  margin-right: 8px;
+  margin-bottom: 8px;
+}

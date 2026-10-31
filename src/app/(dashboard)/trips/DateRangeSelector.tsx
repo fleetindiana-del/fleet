@@ -76,7 +76,13 @@ export function DateRangeSelector({ value, onChange, maxDate }: Props) {
           <span className="min-w-0 flex-1 truncate font-medium">{summaryLabel(value)}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[19rem] p-0" align="start" sideOffset={6}>
+      <PopoverContent
+        className="z-[1300] max-h-[var(--radix-popover-content-available-height)] w-[min(19rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain p-0"
+        align="start"
+        side="bottom"
+        sideOffset={6}
+        collisionPadding={12}
+      >
         <div className="flex border-b border-slate-100 p-1.5 gap-1.5">
           <button
             type="button"

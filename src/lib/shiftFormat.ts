@@ -2,6 +2,20 @@
 
 export { formatDurationMs } from "./shiftVocabulary";
 
+/** Calendar date and clock time, without seconds. Used where "N min ago" stops being readable. */
+export function formatActiveAt(value: string | Date | null | undefined): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** Timestamp with seconds, in the viewer's local time - audit rows need the exact second. */
 export function formatDateTimeSec(value: string | Date | null | undefined): string {
   if (!value) return "-";

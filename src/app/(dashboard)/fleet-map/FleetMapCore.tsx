@@ -1,11 +1,11 @@
 "use client";
 
-import { AdvancedMarker, InfoWindow } from "@vis.gl/react-google-maps";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { AlertTriangle, Loader2, Navigation, Radio, Satellite, StopCircle, Zap, ZapOff } from "lucide-react";
 import { vehicleLabel } from "@/lib/vehicleLabel";
+import { formatActiveAt, formatAgo } from "@/lib/shiftFormat";
 import MapShell from "@/components/maps/MapShell";
-import { Circle, FitBounds, PanTo, Polyline, type LatLng } from "@/components/maps/overlays";
+import { Circle, DivMarker, FitBounds, MapPopup, PanTo, Polyline, type LatLng } from "@/components/maps/overlays";
 
 const TRACK_COLOR: Record<string, string> = {
   fresh: "#10b981",
@@ -23,6 +23,8 @@ interface DeviceState {
   latestAccuracy?: number;
   latestSpeed?: number;
   lastReceivedAt?: string;
+  /** When the last GPS fix was recorded — the pin's position is from this moment. */
+  lastRecordedAt?: string;
   batteryPercent?: number;
   freshness: "fresh" | "parked" | "stale" | "old" | "unavailable";
   /** Minutes since the vehicle last moved. */
@@ -64,7 +66,20 @@ interface Props {
 const ACCURACY_CIRCLE_MAX_M = 80;
 const ACCURACY_CIRCLE_HIDE_ABOVE_M = 150;
 
-/** Teardrop pin matching the old Leaflet divIcon, as marker DOM content. */
+/** Date and time of a clock on the device, plus a short "3h ago" so a live pin still reads as recent. */
+function WhenLine({ label, at }: { label: string; at?: string }) {
+  const when = formatActiveAt(at);
+  if (!when) return null;
+  return (
+    <p>
+      <span className="text-slate-400">{label}</span>{" "}
+      <span className="font-medium text-slate-800">{when}</span>
+      <span className="text-slate-400"> · {formatAgo(at)}</span>
+    </p>
+  );
+}
+
+/** Teardrop pin. The tip sits on the coordinate. */
 function PinGlyph({ color, selected }: { color: string; selected: boolean }) {
   const size = selected ? 30 : 24;
   const height = selected ? 40 : 32;
@@ -137,9 +152,7 @@ export default function FleetMapCore({
   notRespondingDeviceIds = [],
   focusPoint = null,
 }: Props) {
-  // Which marker / trail-start has its InfoWindow open. Google Maps has no
-  // child-popup concept, so the open one is tracked here.
-  const [openInfo, setOpenInfo] = useState<string | null>(null);
+const [openInfo, setOpenInfo] = useState<string | null>(null);
 
   const trackByDevice = new Map(tracks.map((t) => [t.deviceId, t]));
   const center: LatLng =
@@ -190,8 +203,11 @@ export default function FleetMapCore({
         const startKey = `start:${d.deviceId}`;
         const pinKey = `pin:${d.deviceId}`;
 
+        const pinW = selected ? 30 : 24;
+        const pinH = selected ? 40 : 32;
+
         return (
-          <span key={d.deviceId}>
+          <Fragment key={d.deviceId}>
             {latlngs.length > 1 && (
               <>
                 <Polyline
@@ -200,26 +216,33 @@ export default function FleetMapCore({
                   strokeWeight={selected ? 5 : 4}
                   strokeOpacity={selected ? 0.95 : 0.8}
                 />
-                <AdvancedMarker
+                <DivMarker
                   position={latlngs[0]}
-                  onClick={() => setOpenInfo(startKey)}
+                  width={14}
+                  height={14}
+                  anchorX={7}
+                  anchorY={7}
                   title="Trail start"
+                  onClick={() => setOpenInfo(startKey)}
                 >
                   <span
                     className="block h-2.5 w-2.5 rounded-full border-2 border-white"
                     style={{ backgroundColor: color }}
                   />
-                </AdvancedMarker>
-                {openInfo === startKey && (
-                  <InfoWindow position={latlngs[0]} onCloseClick={() => setOpenInfo(null)}>
-                    <p className="text-xs font-semibold text-slate-700">Trail start</p>
-                    {gps[0]?.recordedAt && (
-                      <p className="text-xs text-slate-500">
-                        {new Date(gps[0].recordedAt).toLocaleTimeString()}
-                      </p>
-                    )}
-                  </InfoWindow>
-                )}
+                </DivMarker>
+                <MapPopup
+                  position={latlngs[0]}
+                  open={openInfo === startKey}
+                  onClose={() => setOpenInfo(null)}
+                  offsetY={-14}
+                >
+                  <p className="text-xs font-semibold text-slate-700">Trail start</p>
+                  {gps[0]?.recordedAt && (
+                    <p className="text-xs text-slate-500">
+                      {new Date(gps[0].recordedAt).toLocaleTimeString()}
+                    </p>
+                  )}
+                </MapPopup>
               </>
             )}
 
@@ -235,8 +258,13 @@ export default function FleetMapCore({
               />
             )}
 
-            <AdvancedMarker
+            <DivMarker
               position={markerPos}
+              width={pinW}
+              height={pinH}
+              anchorX={pinW / 2}
+              anchorY={pinH}
+              zIndex={selected ? 800 : 200}
               title={d.employeeName || d.deviceId}
               onClick={() => {
                 onSelectDevice?.(d.deviceId);
@@ -244,15 +272,15 @@ export default function FleetMapCore({
               }}
             >
               <PinGlyph color={color} selected={selected} />
-            </AdvancedMarker>
+            </DivMarker>
 
-            {openInfo === pinKey && (
-              <InfoWindow
-                position={markerPos}
-                pixelOffset={[0, -36]}
-                onCloseClick={() => setOpenInfo(null)}
-              >
-                <div className="min-w-[210px] space-y-2 font-sans text-sm">
+            <MapPopup
+              position={markerPos}
+              open={openInfo === pinKey}
+              onClose={() => setOpenInfo(null)}
+              offsetY={-(pinH + 6)}
+            >
+              <div className="min-w-[210px] space-y-2 font-sans text-sm">
                   <div>
                     <p className="font-bold text-slate-900">{d.employeeName || d.deviceId}</p>
                     {plate && <p className="font-mono text-xs text-slate-600">{plate}</p>}
@@ -266,18 +294,11 @@ export default function FleetMapCore({
                       </p>
                     )}
                     {d.batteryPercent != null && <p>Battery: {d.batteryPercent}%</p>}
-                    {/* Two clocks now, so say which is which: a parked vehicle
-                        has an old "moved" and a recent "heard". */}
-                    {d.ageMinutes != null && (
-                      <p className="text-slate-400">
-                        Moved {d.ageMinutes < 1 ? "< 1" : Math.round(d.ageMinutes)} min ago
-                      </p>
-                    )}
-                    {d.heardMinutes != null && (
-                      <p className="text-slate-400">
-                        Heard {d.heardMinutes < 1 ? "< 1" : Math.round(d.heardMinutes)} min ago
-                      </p>
-                    )}
+                    {/* Two clocks: "moved" is the GPS fix on this pin, "heard"
+                        is the last time the phone checked in. Both are a date
+                        and time, because a gap of weeks is unreadable as minutes. */}
+                    <WhenLine label="Last moved" at={d.lastRecordedAt} />
+                    <WhenLine label="Last heard" at={d.lastReceivedAt} />
                   </div>
                   {notResponding.has(d.deviceId) && (
                     <p className="flex gap-1 rounded bg-amber-50 p-1.5 text-[11px] leading-snug text-amber-900">
@@ -334,9 +355,8 @@ export default function FleetMapCore({
                     </div>
                   )}
                 </div>
-              </InfoWindow>
-            )}
-          </span>
+            </MapPopup>
+          </Fragment>
         );
       })}
     </MapShell>

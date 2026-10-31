@@ -208,32 +208,30 @@ export function Navbar() {
   };
 
   return (
-    <header className="h-16 flex items-center justify-between px-4 sm:px-6 bg-slate-900 border-b border-slate-800 shadow-sm z-20 w-full text-slate-100 flex-shrink-0">
-      <div className="flex items-center gap-3">
-        {/* Hamburger — only visible on mobile */}
+    <header className="z-20 flex min-h-16 w-full min-w-0 flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 text-slate-100 sm:px-6">
+      <div className="flex min-w-0 items-center gap-2">
+        {/* Hamburger — phones and small tablets. The sidebar is a drawer until md. */}
         <button
           onClick={toggle}
-          className="sm:hidden p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white md:hidden"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
         </button>
 
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-lg text-slate-400">Dashboard</span>
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             onClick={handleRefresh}
             disabled={fcmWakePending}
-            className={cn(
-              "p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50"
-            )}
-            title="Refresh dashboard (sends FCM wake to stale devices, then reloads)"
+            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white disabled:opacity-50"
+            title="Refresh this page"
+            aria-label="Refresh this page"
           >
             <RefreshCw className={cn("w-4 h-4", fcmWakePending && "animate-spin")} />
           </button>
           {showingCount !== null && (
-            <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1 text-xs">
+            <span className="hidden items-center gap-1 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1 text-xs md:inline-flex">
               <span className="font-medium text-slate-400">Showing</span>
               <span className="font-semibold text-slate-100">{showingCount}</span>
             </span>
@@ -241,19 +239,20 @@ export function Navbar() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 sm:gap-3">
         {canSeeTrackingAlerts && <TrackingAlertBell />}
 
         {/* FCM Wake Controls */}
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+          <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-slate-500">
             <input
               type="checkbox"
               checked={fcmWakePingAll}
               onChange={(e) => setFcmWakePingAll(e.target.checked)}
               className="rounded border-slate-600 bg-slate-900 accent-indigo-500"
+              aria-label="Ping all devices"
             />
-            <span className="hidden sm:inline">Ping all</span>
+            <span className="hidden md:inline">Ping all</span>
           </label>
           {fcmWakeMsg && (
             <span className={cn(
@@ -285,19 +284,19 @@ export function Navbar() {
             {fcmWakeState === "loading"
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BellRing className="w-3.5 h-3.5" />}
-            <span className="hidden sm:inline">{fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}</span>
+            <span className="hidden md:inline">{fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}</span>
           </button>
         </div>
 
         {session?.user && (
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-2 bg-slate-800 px-2.5 sm:px-3 py-1.5 rounded-full border border-slate-700">
-              <User className="w-4 h-4 text-indigo-400 flex-shrink-0" />
-              <div className="flex flex-col leading-none">
-                <span className="text-[0.6rem] font-medium truncate max-w-[100px] sm:max-w-none">
+            <div className="flex max-w-[9.5rem] items-center gap-2 rounded-full border border-slate-700 bg-slate-800 px-2.5 py-1.5 sm:max-w-none sm:px-3">
+              <User className="h-4 w-4 shrink-0 text-indigo-400" />
+              <div className="flex min-w-0 flex-col leading-none">
+                <span className="truncate text-[0.6rem] font-medium">
                   {session.user.name || "Admin"}
                 </span>
-                <span className="text-xs text-slate-400 uppercase tracking-wider hidden sm:block">
+                <span className="hidden text-xs uppercase tracking-wider text-slate-400 sm:block">
                   {session.user.role}
                 </span>
               </div>

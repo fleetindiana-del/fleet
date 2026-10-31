@@ -486,6 +486,8 @@ export interface AccountRow extends AccountFigures {
   advanceCount: number;
   submittedCount: number;
   pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
   lastActivityAt: string | null;
   /** The cached wallet balance on the Driver document. */
   cachedBalance: number;
@@ -1431,6 +1433,8 @@ export async function getAccountSummaries(filter: AccountFilter): Promise<{
       advanceCount: l?.byType.advance?.count ?? 0,
       submittedCount: (e.pending?.count ?? 0) + (e.approved?.count ?? 0) + (e.rejected?.count ?? 0),
       pendingCount: e.pending?.count ?? 0,
+      approvedCount: e.approved?.count ?? 0,
+      rejectedCount: e.rejected?.count ?? 0,
       lastActivityAt: l?.last ? new Date(l.last).toISOString() : null,
       cachedBalance,
       drifted: Math.abs(cachedBalance - figures.balance) > DRIFT_TOLERANCE,

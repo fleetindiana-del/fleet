@@ -2,16 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Map, Navigation, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck, Smartphone, PhoneCall, Building2, UsersRound, ChevronLeft, ChevronRight, Car, QrCode, Satellite, Wallet, Clock, Siren } from "lucide-react";
+import { Users, Map, Navigation, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck, Smartphone, PhoneCall, Building2, UsersRound, ChevronLeft, ChevronRight, Car, QrCode, Satellite, Wallet, Siren } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 import { useCallback, useEffect, useMemo, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 const sidebarNavItems = [
-  { title: "Dashboard", href: "/", icon: LayoutDashboard },
   { title: "Drivers", href: "/drivers", icon: Users },
   { title: "Expenses", href: "/expenses", icon: Wallet },
-  { title: "Driver Shifts", href: "/shifts", icon: Clock },
   { title: "Tracking Alerts", href: "/tracking-alerts", icon: Siren },
   { title: "Fleet GPS", href: "/fleet-map", icon: Satellite },
   { title: "Route History", href: "/trips", icon: Navigation },
@@ -40,7 +38,7 @@ const sidebarNavItems = [
  * This trims the menu; it is not an access boundary by itself (the income-expense
  * API enforces its own role check).
  */
-const HR_NAV_HREFS = ["/expenses", "/drivers", "/shifts", "/tracking-alerts"];
+const HR_NAV_HREFS = ["/expenses", "/drivers", "/tracking-alerts"];
 
 export function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
@@ -122,7 +120,7 @@ export function Sidebar({ role }: { role?: string }) {
       {/* ── Mobile backdrop overlay ── */}
       <div
         className={cn(
-          "fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 sm:hidden",
+          "fixed inset-0 z-30 bg-black/60 backdrop-blur-sm transition-opacity duration-300 md:hidden",
           isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         )}
         onClick={close}
@@ -135,10 +133,10 @@ export function Sidebar({ role }: { role?: string }) {
           // Base styles — always present
           "relative flex flex-col h-full bg-slate-900 border-r border-slate-800 text-slate-300 z-40",
           // Desktop: static, always visible, fixed width
-          "sm:relative sm:top-auto sm:left-auto sm:bottom-auto sm:translate-x-0 sm:w-[var(--sidebar-width)] sm:flex sm:flex-shrink-0",
+          "md:relative md:top-auto md:left-auto md:bottom-auto md:translate-x-0 md:w-[var(--sidebar-width)] md:flex md:flex-shrink-0",
           // Mobile: fixed drawer, slides in/out
           "fixed top-0 left-0 bottom-0 w-72 transition-transform duration-300 ease-in-out",
-          isOpen ? "translate-x-0" : "-translate-x-full sm:translate-x-0"
+          isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         )}
         style={
           {
@@ -148,9 +146,9 @@ export function Sidebar({ role }: { role?: string }) {
       >
         {/* Header */}
         <div className="flex items-center justify-between h-16 px-5 border-b border-slate-800 font-bold text-xl tracking-tight text-white flex-shrink-0">
-          <div className={cn("flex items-center gap-2 min-w-0", isCollapsed && "sm:justify-center sm:w-full")}>
-            <span className={cn("truncate", isCollapsed && "sm:hidden")}>FleetSaaS</span>
-            <span className={cn("hidden sm:inline text-indigo-300/90", !isCollapsed && "sm:hidden")} aria-hidden="true">
+          <div className={cn("flex items-center gap-2 min-w-0", isCollapsed && "md:justify-center md:w-full")}>
+            <span className={cn("truncate", isCollapsed && "md:hidden")}>FleetSaaS</span>
+            <span className={cn("hidden md:inline text-indigo-300/90", !isCollapsed && "md:hidden")} aria-hidden="true">
               FS
             </span>
           </div>
@@ -160,7 +158,7 @@ export function Sidebar({ role }: { role?: string }) {
             <button
               type="button"
               onClick={toggleCollapsed}
-              className="hidden sm:inline-flex p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              className="hidden md:inline-flex p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
               aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
@@ -170,7 +168,7 @@ export function Sidebar({ role }: { role?: string }) {
             {/* Close button — only shown on mobile */}
             <button
               onClick={close}
-              className="sm:hidden p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              className="md:hidden p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
               aria-label="Close menu"
             >
               <X className="h-5 w-5" />
@@ -194,7 +192,7 @@ export function Sidebar({ role }: { role?: string }) {
                     onClick={close} // auto-close on mobile after navigation
                     className={cn(
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all",
-                      isCollapsed && "sm:justify-center sm:px-2",
+                      isCollapsed && "md:justify-center md:px-2",
                       isActive
                         ? "bg-indigo-600 font-medium text-white shadow-sm"
                         : "hover:bg-slate-800 hover:text-white"
@@ -202,7 +200,7 @@ export function Sidebar({ role }: { role?: string }) {
                     title={isCollapsed ? item.title : undefined}
                   >
                     <Icon className="h-5 w-5 flex-shrink-0" />
-                    <span className={cn("truncate", isCollapsed && "sm:hidden")}>{item.title}</span>
+                    <span className={cn("truncate", isCollapsed && "md:hidden")}>{item.title}</span>
                   </Link>
                 </li>
               );
@@ -210,14 +208,14 @@ export function Sidebar({ role }: { role?: string }) {
           </ul>
         </div>
 
-        <div className={cn("p-4 border-t border-slate-800 text-xs text-slate-500 text-center flex-shrink-0", isCollapsed && "sm:hidden")}>
+        <div className={cn("p-4 border-t border-slate-800 text-xs text-slate-500 text-center flex-shrink-0", isCollapsed && "md:hidden")}>
           © 2026 Admin Panel
         </div>
 
         {/* Desktop resize handle */}
         {!isCollapsed && (
           <div
-            className="hidden sm:block absolute top-0 right-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-indigo-500/20 active:bg-indigo-500/30 transition-colors"
+            className="hidden md:block absolute top-0 right-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-indigo-500/20 active:bg-indigo-500/30 transition-colors"
             onPointerDown={onResizePointerDown}
             role="separator"
             aria-label="Resize sidebar"

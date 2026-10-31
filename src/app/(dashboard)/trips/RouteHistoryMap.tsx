@@ -1,14 +1,18 @@
 "use client";
 
-import {
-  AdvancedMarker,
-  AdvancedMarkerAnchorPoint,
-  InfoWindow,
-  useMap,
-} from "@vis.gl/react-google-maps";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { useMap } from "react-leaflet";
+import L from "leaflet";
 import MapShell from "@/components/maps/MapShell";
-import { FitBounds, Polyline, type LatLng } from "@/components/maps/overlays";
+import {
+  DivMarker,
+  FitBounds,
+  MapPopup,
+  Polyline,
+  RouteArrows,
+  type LatLng,
+  type LineClickEvent,
+} from "@/components/maps/overlays";
 import {
   type RoutePoint,
   type IdleEvent,
@@ -64,7 +68,6 @@ interface Props {
   onSelect?: (sel: MapSelection) => void;
 }
 
-/** routeAnalytics works in Leaflet's [lat, lng] tuples; Google wants literals. */
 const toLatLng = (p: [number, number]): LatLng => ({ lat: p[0], lng: p[1] });
 
 function FocusController({
@@ -98,16 +101,17 @@ function FocusController({
         if (p) target = { lat: p.latitude, lng: p.longitude };
       }
     } else if (focus.type === "bounds" && points.length > 0) {
-      const bounds = new google.maps.LatLngBounds();
-      points.forEach((p) => bounds.extend({ lat: p.latitude, lng: p.longitude }));
-      map.fitBounds(bounds, 100);
+      const bounds = L.latLngBounds(
+        points.map((p) => [p.latitude, p.longitude] as [number, number])
+      );
+      map.fitBounds(bounds, { padding: [100, 100], maxZoom: 16 });
       onConsumed?.();
       return;
     }
 
     if (target) {
-      map.panTo(target);
-      if ((map.getZoom() ?? 0) < 16) map.setZoom(16);
+      const zoom = Math.max(map.getZoom(), 16);
+      map.setView([target.lat, target.lng], zoom, { animate: true });
     }
     onConsumed?.();
   }, [focus, map, points, idleEvents, violations, onConsumed]);
@@ -128,17 +132,6 @@ function fmtTime(iso: string) {
     month: "short",
   });
 }
-
-/**
- * Direction chevron repeated along the drawn route.
- *
- * Path coordinates are symbol-space (origin at the anchor, -y pointing along the
- * line) and the string form avoids touching `google.maps.SymbolPath` during
- * render, before the Maps library has finished loading.
- */
-const DIRECTION_ARROW_PATH = "M 0 -7 L 5 6 L 0 2.5 L -5 6 Z";
-/** Pixel spacing between direction arrows — constant on screen at any zoom. */
-const DIRECTION_ARROW_REPEAT = "110px";
 
 /**
  * Direction-of-travel arrow, rotated to the heading.
@@ -263,7 +256,7 @@ export const STATUS_LABEL: Record<PointStatus, string> = {
   moving: "Moving",
 };
 
-/** Tone for a light (white InfoWindow) background. */
+/** Tone for a light popup background. */
 const STATUS_TONE_LIGHT: Record<PointStatus, string> = {
   start: "text-emerald-600",
   end: "text-rose-600",
@@ -280,9 +273,9 @@ const STATUS_TONE: Record<PointStatus, string> = {
 };
 
 /**
- * Readout that follows the route cursor. Rendered inside the marker's own DOM
- * rather than an InfoWindow so hovering cannot flicker: the card is a child of
- * the element being hovered, so it never steals the pointer from it.
+ * Readout that follows the route cursor. Rendered inside the marker so hovering
+ * cannot flicker: the card is a child of the element being hovered, so it never
+ * steals the pointer from it.
  */
 function CursorHoverCard({
   point,
@@ -372,7 +365,7 @@ export default function RouteHistoryMap({
 
   // Selecting a row in the sidebar (Idle Stops, Events) should feel the same
   // as clicking the matching marker directly: pan there (FocusController,
-  // below) AND pop its InfoWindow, so the list and the map never disagree
+  // below) AND open its popup, so the list and the map never disagree
   // about which stop/violation/point is being looked at. Adjusted during
   // render off a change signature — same pattern as routeKey/lastRouteKey
   // below — rather than in an effect, since this is deriving state from a
@@ -419,9 +412,8 @@ export default function RouteHistoryMap({
     return best;
   };
 
-  const handleRouteClick = (e: google.maps.PolyMouseEvent) => {
-    if (!e.latLng) return;
-    setInspectedIdx(nearestIdx(e.latLng.lat(), e.latLng.lng()));
+  const handleRouteClick = (e: LineClickEvent) => {
+    setInspectedIdx(nearestIdx(e.latlng.lat, e.latlng.lng));
     setOpenInfo("inspected");
   };
 
@@ -481,23 +473,6 @@ export default function RouteHistoryMap({
     () => visiblePoints.map((p) => ({ lat: p.latitude, lng: p.longitude })),
     [visiblePoints]
   );
-  const directionIcons = useMemo(
-    () => [
-      {
-        icon: {
-          path: DIRECTION_ARROW_PATH,
-          fillColor: deviceColor,
-          fillOpacity: 1,
-          strokeColor: "#ffffff",
-          strokeWeight: 1.2,
-          scale: 1,
-        },
-        offset: "0",
-        repeat: DIRECTION_ARROW_REPEAT,
-      },
-    ],
-    [deviceColor]
-  );
 
   const inspected = inspectedIdx != null ? points[inspectedIdx] : null;
   const inspectedBattery = inspectedIdx != null ? batteryAt(points, inspectedIdx) : null;
@@ -546,7 +521,6 @@ export default function RouteHistoryMap({
             strokeOpacity={0}
             strokeWeight={18}
             onClick={handleRouteClick}
-            zIndex={2}
           />
 
           {/* Device-color underlay — one unbroken line so the route always reads
@@ -568,15 +542,9 @@ export default function RouteHistoryMap({
                 key={`s-${i}`}
                 path={seg.positions.map(toLatLng)}
                 strokeColor={seg.color}
-                strokeWeight={0}
-                strokeOpacity={0}
-                icons={[
-                  {
-                    icon: { path: "M 0,-1 0,1", strokeOpacity: 0.7, strokeWeight: 4, scale: 3 },
-                    offset: "0",
-                    repeat: "14px",
-                  },
-                ]}
+                strokeWeight={4}
+                strokeOpacity={0.75}
+                dashArray="2 12"
                 onClick={handleRouteClick}
               />
             ) : (
@@ -591,16 +559,7 @@ export default function RouteHistoryMap({
             )
           )}
 
-          {/* Direction-of-travel arrows spaced along the whole drawn route */}
-          {arrowPath.length > 1 && (
-            <Polyline
-              path={arrowPath}
-              strokeOpacity={0}
-              strokeWeight={0}
-              icons={directionIcons}
-              zIndex={3}
-            />
-          )}
+          {arrowPath.length > 1 && <RouteArrows path={arrowPath} color={deviceColor} />}
 
           {/* Speeding segments highlight */}
           {violationPolylines.map((v) => (
@@ -614,12 +573,17 @@ export default function RouteHistoryMap({
             />
           ))}
 
-          {violationPolylines.map((v) =>
-            openInfo === `v:${v.id}` ? (
-              <InfoWindow
+          {violationPolylines.map((v) => {
+            const raw = v.positions[Math.floor(v.positions.length / 2)] ?? v.positions[0];
+            if (!raw) return null;
+            const mid = toLatLng(raw);
+            return (
+              <MapPopup
                 key={`vi-${v.id}`}
-                position={toLatLng(v.positions[Math.floor(v.positions.length / 2)])}
-                onCloseClick={() => setOpenInfo(null)}
+                position={mid}
+                open={openInfo === `v:${v.id}`}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-12}
               >
                 <div className="min-w-[180px] font-sans text-xs">
                   <p className="mb-1 font-bold text-rose-700">Speed violation</p>
@@ -629,126 +593,142 @@ export default function RouteHistoryMap({
                   <Row k="End" v={fmtTime(v.endTime)} />
                   <Row k="Duration" v={formatDuration(v.durationMs)} />
                 </div>
-              </InfoWindow>
-            ) : null
-          )}
+              </MapPopup>
+            );
+          })}
 
           {/* Start */}
           {first && (
             <>
-              <AdvancedMarker
+              <DivMarker
                 position={{ lat: first.latitude, lng: first.longitude }}
+                width={28}
+                height={28}
+                anchorX={14}
+                anchorY={14}
                 title={`Trip start · ${fmtTime(first.recordedAt)}`}
                 onClick={() => setOpenInfo("start")}
               >
                 <PinGlyph color="#10b981" glyph="S" size={28} />
-              </AdvancedMarker>
-              {openInfo === "start" && (
-                <InfoWindow
-                  position={{ lat: first.latitude, lng: first.longitude }}
-                  onCloseClick={() => setOpenInfo(null)}
-                >
-                  <div className="font-sans text-xs">
-                    <p className="mb-1 font-bold text-emerald-700">Trip start</p>
-                    <Row k="Time" v={fmtTime(first.recordedAt)} />
-                    <Row
-                      k="Coords"
-                      v={`${first.latitude.toFixed(5)}, ${first.longitude.toFixed(5)}`}
-                    />
-                  </div>
-                </InfoWindow>
-              )}
+              </DivMarker>
+              <MapPopup
+                position={{ lat: first.latitude, lng: first.longitude }}
+                open={openInfo === "start"}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-22}
+              >
+                <div className="font-sans text-xs">
+                  <p className="mb-1 font-bold text-emerald-700">Trip start</p>
+                  <Row k="Time" v={fmtTime(first.recordedAt)} />
+                  <Row
+                    k="Coords"
+                    v={`${first.latitude.toFixed(5)}, ${first.longitude.toFixed(5)}`}
+                  />
+                </div>
+              </MapPopup>
             </>
           )}
 
           {/* End */}
           {points.length > 1 && last && (
             <>
-              <AdvancedMarker
+              <DivMarker
                 position={{ lat: last.latitude, lng: last.longitude }}
+                width={28}
+                height={28}
+                anchorX={14}
+                anchorY={14}
                 title={`Trip end · ${fmtTime(last.recordedAt)}`}
                 onClick={() => setOpenInfo("end")}
               >
                 <PinGlyph color="#ef4444" glyph="E" size={28} />
-              </AdvancedMarker>
-              {openInfo === "end" && (
-                <InfoWindow
-                  position={{ lat: last.latitude, lng: last.longitude }}
-                  onCloseClick={() => setOpenInfo(null)}
-                >
-                  <div className="font-sans text-xs">
-                    <p className="mb-1 font-bold text-rose-700">Trip end</p>
-                    <Row k="Time" v={fmtTime(last.recordedAt)} />
-                    <Row
-                      k="Coords"
-                      v={`${last.latitude.toFixed(5)}, ${last.longitude.toFixed(5)}`}
-                    />
-                  </div>
-                </InfoWindow>
-              )}
+              </DivMarker>
+              <MapPopup
+                position={{ lat: last.latitude, lng: last.longitude }}
+                open={openInfo === "end"}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-22}
+              >
+                <div className="font-sans text-xs">
+                  <p className="mb-1 font-bold text-rose-700">Trip end</p>
+                  <Row k="Time" v={fmtTime(last.recordedAt)} />
+                  <Row
+                    k="Coords"
+                    v={`${last.latitude.toFixed(5)}, ${last.longitude.toFixed(5)}`}
+                  />
+                </div>
+              </MapPopup>
             </>
           )}
 
           {/* Idle markers */}
           {showIdle &&
             idleEvents.map((e) => (
-              <span key={e.id}>
-                <AdvancedMarker
+              <Fragment key={e.id}>
+                <DivMarker
                   position={{ lat: e.latitude, lng: e.longitude }}
+                  width={26}
+                  height={26}
+                  anchorX={13}
+                  anchorY={13}
                   title={`Idle ${formatDuration(e.durationMs)}`}
                   onClick={() => setOpenInfo(`idle:${e.id}`)}
                 >
                   <PinGlyph color={IDLE_COLOR} glyph="⏸" size={26} />
-                </AdvancedMarker>
-                {openInfo === `idle:${e.id}` && (
-                  <InfoWindow
-                    position={{ lat: e.latitude, lng: e.longitude }}
-                    onCloseClick={() => setOpenInfo(null)}
-                  >
-                    <div className="min-w-[180px] font-sans text-xs">
-                      <p className="mb-1 font-bold text-purple-700">Idle / Stopped</p>
-                      <Row k="Duration" v={`Idle for ${formatDurationPrecise(e.durationMs)}`} />
-                      {batteryAt(points, e.startIdx) != null && (
-                        <Row k="Battery" v={`${batteryAt(points, e.startIdx)}%`} />
-                      )}
-                      <Row k="Start" v={fmtTime(e.startTime)} />
-                      <Row k="End" v={fmtTime(e.endTime)} />
-                      <Row
-                        k="Location"
-                        v={`${e.latitude.toFixed(5)}, ${e.longitude.toFixed(5)}`}
-                      />
-                    </div>
-                  </InfoWindow>
-                )}
-              </span>
+                </DivMarker>
+                <MapPopup
+                  position={{ lat: e.latitude, lng: e.longitude }}
+                  open={openInfo === `idle:${e.id}`}
+                  onClose={() => setOpenInfo(null)}
+                  offsetY={-20}
+                >
+                  <div className="min-w-[180px] font-sans text-xs">
+                    <p className="mb-1 font-bold text-purple-700">Idle / Stopped</p>
+                    <Row k="Duration" v={`Idle for ${formatDurationPrecise(e.durationMs)}`} />
+                    {batteryAt(points, e.startIdx) != null && (
+                      <Row k="Battery" v={`${batteryAt(points, e.startIdx)}%`} />
+                    )}
+                    <Row k="Start" v={fmtTime(e.startTime)} />
+                    <Row k="End" v={fmtTime(e.endTime)} />
+                    <Row
+                      k="Location"
+                      v={`${e.latitude.toFixed(5)}, ${e.longitude.toFixed(5)}`}
+                    />
+                  </div>
+                </MapPopup>
+              </Fragment>
             ))}
 
           {/* Max speed */}
           {showMaxSpeed && maxSpeed && maxSpeed.kmh > 0 && (
             <>
-              <AdvancedMarker
+              <DivMarker
                 position={{ lat: maxSpeed.latitude, lng: maxSpeed.longitude }}
+                width={26}
+                height={26}
+                anchorX={13}
+                anchorY={13}
                 title={`Max ${maxSpeed.kmh.toFixed(0)} km/h`}
                 onClick={() => setOpenInfo("max")}
               >
                 <PinGlyph color="#f59e0b" glyph="⚡" size={26} />
-              </AdvancedMarker>
-              {openInfo === "max" && (
-                <InfoWindow
-                  position={{ lat: maxSpeed.latitude, lng: maxSpeed.longitude }}
-                  onCloseClick={() => setOpenInfo(null)}
-                >
-                  <div className="min-w-[180px] font-sans text-xs">
-                    <p className="mb-1 font-bold text-amber-700">Maximum speed</p>
-                    <Row k="Speed" v={`${maxSpeed.kmh.toFixed(1)} km/h`} />
-                    <Row k="Time" v={fmtTime(maxSpeed.time)} />
-                    <Row
-                      k="Location"
-                      v={`${maxSpeed.latitude.toFixed(5)}, ${maxSpeed.longitude.toFixed(5)}`}
-                    />
-                  </div>
-                </InfoWindow>
-              )}
+              </DivMarker>
+              <MapPopup
+                position={{ lat: maxSpeed.latitude, lng: maxSpeed.longitude }}
+                open={openInfo === "max"}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-20}
+              >
+                <div className="min-w-[180px] font-sans text-xs">
+                  <p className="mb-1 font-bold text-amber-700">Maximum speed</p>
+                  <Row k="Speed" v={`${maxSpeed.kmh.toFixed(1)} km/h`} />
+                  <Row k="Time" v={fmtTime(maxSpeed.time)} />
+                  <Row
+                    k="Location"
+                    v={`${maxSpeed.latitude.toFixed(5)}, ${maxSpeed.longitude.toFixed(5)}`}
+                  />
+                </div>
+              </MapPopup>
             </>
           )}
 
@@ -758,29 +738,33 @@ export default function RouteHistoryMap({
               const p = points[v.peakIdx];
               if (!p) return null;
               return (
-                <span key={`vm-${v.id}`}>
-                  <AdvancedMarker
+                <Fragment key={`vm-${v.id}`}>
+                  <DivMarker
                     position={{ lat: p.latitude, lng: p.longitude }}
+                    width={24}
+                    height={24}
+                    anchorX={12}
+                    anchorY={12}
                     title={`${v.peakKmh.toFixed(0)} km/h over limit`}
                     onClick={() => setOpenInfo(`vp:${v.id}`)}
                   >
                     <PinGlyph color={VIOLATION_COLOR} glyph="!" size={24} />
-                  </AdvancedMarker>
-                  {openInfo === `vp:${v.id}` && (
-                    <InfoWindow
-                      position={{ lat: p.latitude, lng: p.longitude }}
-                      onCloseClick={() => setOpenInfo(null)}
-                    >
-                      <div className="min-w-[180px] font-sans text-xs">
-                        <p className="mb-1 font-bold text-rose-700">Speed violation</p>
-                        <Row k="Actual" v={`${v.peakKmh.toFixed(1)} km/h`} />
-                        {speedLimitKmh > 0 && <Row k="Expected" v={`${speedLimitKmh} km/h`} />}
-                        <Row k="Time" v={fmtTime(v.startTime)} />
-                        <Row k="Duration" v={formatDuration(v.durationMs)} />
-                      </div>
-                    </InfoWindow>
-                  )}
-                </span>
+                  </DivMarker>
+                  <MapPopup
+                    position={{ lat: p.latitude, lng: p.longitude }}
+                    open={openInfo === `vp:${v.id}`}
+                    onClose={() => setOpenInfo(null)}
+                    offsetY={-18}
+                  >
+                    <div className="min-w-[180px] font-sans text-xs">
+                      <p className="mb-1 font-bold text-rose-700">Speed violation</p>
+                      <Row k="Actual" v={`${v.peakKmh.toFixed(1)} km/h`} />
+                      {speedLimitKmh > 0 && <Row k="Expected" v={`${speedLimitKmh} km/h`} />}
+                      <Row k="Time" v={fmtTime(v.startTime)} />
+                      <Row k="Duration" v={formatDuration(v.durationMs)} />
+                    </div>
+                  </MapPopup>
+                </Fragment>
               );
             })}
 
@@ -788,41 +772,44 @@ export default function RouteHistoryMap({
               recorded fix and see its speed, battery, timestamp and more. */}
           {inspected && (
             <>
-              <AdvancedMarker
+              <DivMarker
                 position={{ lat: inspected.latitude, lng: inspected.longitude }}
-                anchorPoint={AdvancedMarkerAnchorPoint.CENTER}
+                width={16}
+                height={16}
+                anchorX={8}
+                anchorY={8}
                 zIndex={900}
                 onClick={() => setOpenInfo("inspected")}
               >
                 <InspectedPointGlyph />
-              </AdvancedMarker>
-              {openInfo === "inspected" && (
-                <InfoWindow
-                  position={{ lat: inspected.latitude, lng: inspected.longitude }}
-                  onCloseClick={() => setOpenInfo(null)}
-                >
-                  <PointDetails
-                    p={inspected}
-                    battery={inspectedBattery}
-                    idle={inspectedIdle}
-                    idleElapsedMs={idleElapsedAt(inspected, inspectedIdle)}
-                    status={statusAt(points, idleEvents, inspectedIdx!)}
-                    distanceKm={distanceUpToKm(points, inspectedIdx!)}
-                  />
-                </InfoWindow>
-              )}
+              </DivMarker>
+              <MapPopup
+                position={{ lat: inspected.latitude, lng: inspected.longitude }}
+                open={openInfo === "inspected"}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-16}
+              >
+                <PointDetails
+                  p={inspected}
+                  battery={inspectedBattery}
+                  idle={inspectedIdle}
+                  idleElapsedMs={idleElapsedAt(inspected, inspectedIdle)}
+                  status={statusAt(points, idleEvents, inspectedIdx!)}
+                  distanceKm={distanceUpToKm(points, inspectedIdx!)}
+                />
+              </MapPopup>
             </>
           )}
 
           {/* Playback / live cursor — speed, time and battery on hover */}
           {readoutPoint && (
             <>
-              <AdvancedMarker
+              <DivMarker
                 position={{ lat: readoutPoint.latitude, lng: readoutPoint.longitude }}
-                // Centre the glyph on its coordinate. The default bottom-centre
-                // anchor floats the arrow above the route; centring puts it on
-                // the line, so it reads as the vehicle's actual position.
-                anchorPoint={AdvancedMarkerAnchorPoint.CENTER}
+                width={cursor ? 32 : 30}
+                height={cursor ? 32 : 30}
+                anchorX={cursor ? 16 : 15}
+                anchorY={cursor ? 16 : 15}
                 title={[
                   `${speedKmh(readoutPoint).toFixed(0)} km/h`,
                   fmtTime(readoutPoint.recordedAt),
@@ -834,7 +821,7 @@ export default function RouteHistoryMap({
                 zIndex={cursor ? 1000 : 500}
                 onClick={() => setOpenInfo("cursor")}
               >
-                <div className="group relative flex items-center justify-center">
+                <div className="group relative flex h-full w-full items-center justify-center">
                   <CursorHoverCard
                     point={readoutPoint}
                     battery={readoutBattery}
@@ -853,22 +840,22 @@ export default function RouteHistoryMap({
                     />
                   )}
                 </div>
-              </AdvancedMarker>
-              {openInfo === "cursor" && (
-                <InfoWindow
-                  position={{ lat: readoutPoint.latitude, lng: readoutPoint.longitude }}
-                  onCloseClick={() => setOpenInfo(null)}
-                >
-                  <PointDetails
-                    p={readoutPoint}
-                    battery={readoutBattery}
-                    idle={cursorIdle}
-                    idleElapsedMs={cursorIdleElapsedMs}
-                    status={statusAt(points, idleEvents, readoutIdx)}
-                    distanceKm={distanceUpToKm(points, readoutIdx)}
-                  />
-                </InfoWindow>
-              )}
+              </DivMarker>
+              <MapPopup
+                position={{ lat: readoutPoint.latitude, lng: readoutPoint.longitude }}
+                open={openInfo === "cursor"}
+                onClose={() => setOpenInfo(null)}
+                offsetY={-24}
+              >
+                <PointDetails
+                  p={readoutPoint}
+                  battery={readoutBattery}
+                  idle={cursorIdle}
+                  idleElapsedMs={cursorIdleElapsedMs}
+                  status={statusAt(points, idleEvents, readoutIdx)}
+                  distanceKm={distanceUpToKm(points, readoutIdx)}
+                />
+              </MapPopup>
             </>
           )}
         </>

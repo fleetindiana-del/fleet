@@ -67,7 +67,7 @@ export function ShiftDetailDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto border-slate-800 bg-slate-900 text-slate-100 sm:max-w-5xl">
+      <DialogContent className="max-h-[85vh] w-full max-w-[min(64rem,calc(100vw-1.5rem))] overflow-x-hidden overflow-y-auto border-slate-800 bg-slate-900 text-slate-100">
         <DialogHeader>
           <div className="flex flex-wrap items-center justify-between gap-3 pr-6">
             <div>
@@ -117,7 +117,7 @@ export function ShiftDetailDialog({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Figure label="Shift started" value={formatDateTimeSec(s.actualStart)} />
               <Figure
                 label="Shift ended"

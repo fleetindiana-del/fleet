@@ -1,21 +1,10 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { canViewShifts } from "@/lib/shiftApi";
-import ShiftsClient from "./ShiftsClient";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-export default async function ShiftsPage() {
-  const session = await getServerSession(authOptions);
-
-  // The API enforces this too; checking here just avoids showing a broken page.
-  if (!canViewShifts(session?.user?.role)) {
-    return (
-      <div className="flex h-full items-center justify-center text-slate-400">
-        You do not have permission to view driver shifts.
-      </div>
-    );
-  }
-
-  return <ShiftsClient />;
+/**
+ * The shift list duplicated Tracking Alerts (live status, history, and the same
+ * shift detail). The phone and alert APIs are unchanged; this address only
+ * forwards old links.
+ */
+export default function ShiftsPage() {
+  redirect("/tracking-alerts");
 }

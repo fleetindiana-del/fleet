@@ -22,6 +22,7 @@ import {
 import dynamic from "next/dynamic";
 import { useSidebar } from "@/components/layout/SidebarContext";
 import { vehicleLabel } from "@/lib/vehicleLabel";
+import { formatActiveAt, formatAgo } from "@/lib/shiftFormat";
 import type { DeviceTrack, LocationCommand } from "./FleetMapCore";
 
 const FleetMapCore = dynamic(() => import("./FleetMapCore"), { ssr: false });
@@ -337,6 +338,7 @@ export default function FleetMapPage() {
                             ? `${d.latestCoordinates.lat.toFixed(4)}, ${d.latestCoordinates.lng.toFixed(4)}`
                             : "No location"}
                         </span>
+                        <ActiveWhen recordedAt={d.lastRecordedAt} receivedAt={d.lastReceivedAt} />
                         {d.blockedReason && (
                           <span className="mt-0.5 block truncate text-xs font-medium text-rose-600">
                             {d.blockedReason}
@@ -382,6 +384,12 @@ export default function FleetMapPage() {
                 </button>
               </div>
             </div>
+
+            <ActiveWhen
+              recordedAt={selected.lastRecordedAt}
+              receivedAt={selected.lastReceivedAt}
+              detail
+            />
 
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
               {selected.latestCoordinates?.lat && (
@@ -510,6 +518,51 @@ export default function FleetMapPage() {
             <p className="mt-0.5 text-xs text-slate-500">Enroll a device, then use Start on this map (or open the phone app once for permissions).</p>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Last time this vehicle moved, and the last time the phone checked in. */
+function ActiveWhen({
+  recordedAt,
+  receivedAt,
+  detail,
+}: {
+  recordedAt?: string;
+  receivedAt?: string;
+  detail?: boolean;
+}) {
+  const moved = formatActiveAt(recordedAt);
+  const heard = formatActiveAt(receivedAt);
+  if (!moved && !heard) return null;
+
+  if (!detail) {
+    const at = receivedAt || recordedAt;
+    const when = formatActiveAt(at);
+    if (!when) return null;
+    return (
+      <span className="mt-0.5 block truncate text-xs text-slate-500">
+        Last active {when}
+      </span>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-0.5 text-xs">
+      {moved && (
+        <p>
+          <span className="text-slate-400">Last moved</span>{" "}
+          <span className="font-medium text-slate-800">{moved}</span>
+          <span className="text-slate-400"> · {formatAgo(recordedAt)}</span>
+        </p>
+      )}
+      {heard && (
+        <p>
+          <span className="text-slate-400">Last heard</span>{" "}
+          <span className="font-medium text-slate-800">{heard}</span>
+          <span className="text-slate-400"> · {formatAgo(receivedAt)}</span>
+        </p>
       )}
     </div>
   );

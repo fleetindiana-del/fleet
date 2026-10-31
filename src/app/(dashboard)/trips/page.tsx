@@ -619,10 +619,9 @@ export default function RouteHistoryPage() {
       )}
 
       {/* ─── Left column ─── */}
-      <div className="absolute left-3 top-3 z-[1100] flex w-[min(calc(100%-1.5rem),24rem)] flex-col gap-2 sm:left-4 sm:top-4">
-        {/* Filters panel (collapsible) — Active Employee first, then the
-            Date/Time range that's scoped to whoever is selected, so the two
-            read as one connected filter rather than separate controls. */}
+      <div className="absolute left-3 top-3 z-[1100] flex max-h-[calc(100dvh-1.5rem)] w-[min(calc(100%-1.5rem),24rem)] flex-col gap-2 overflow-y-auto sm:left-4 sm:top-4">
+        {/* Date sits above the employee roster so the day being viewed is the
+            first thing on the panel, on a phone as well as a desktop. */}
         <CollapsiblePanel
           title="Route History"
           subtitle={
@@ -648,23 +647,23 @@ export default function RouteHistoryPage() {
             </button>
           }
         >
-          {/* Active Employee */}
-          <EmployeeCombobox
-            devices={devices}
-            selectedDeviceId={selectedDeviceId}
-            onSelect={(d) => {
-              setSelectedDeviceId(d.deviceId);
-              setFormError("");
-            }}
-            onClear={() => setSelectedDeviceId(null)}
-          />
-
-          {/* Date / time range */}
-          <div className="mt-2">
-            <span className="mb-1 block text-[11px] font-medium text-slate-500">
+          <div>
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               Date
             </span>
             <DateRangeSelector value={dateSelection} onChange={setDateSelection} maxDate={today} />
+          </div>
+
+          <div className="mt-3">
+            <EmployeeCombobox
+              devices={devices}
+              selectedDeviceId={selectedDeviceId}
+              onSelect={(d) => {
+                setSelectedDeviceId(d.deviceId);
+                setFormError("");
+              }}
+              onClear={() => setSelectedDeviceId(null)}
+            />
           </div>
 
           <label className="mt-2 block">

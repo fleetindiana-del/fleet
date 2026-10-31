@@ -17,15 +17,22 @@ export async function GET() {
 
     await connectToDatabase();
 
-    const query: any = {};
+    const query: Record<string, unknown> = {};
     if (session.user.role !== "super_admin") {
       query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
     }
 
     const vehicles = await Vehicle.find(query).sort({ createdAt: -1 }).lean();
-    return NextResponse.json(
-      vehicles.map((v) => ({ ...v, model: v.vehicleModel }))
-    );
+    // Super admin can see every company. The fleet master is the same set of
+    // registrations copied per company for drivers, so collapse to one row each.
+    const rows =
+      session.user.role === "super_admin"
+        ? vehicles.filter((vehicle, index, all) => {
+            const key = String(vehicle.registration || vehicle._id).trim().toLowerCase();
+            return all.findIndex((row) => String(row.registration || row._id).trim().toLowerCase() === key) === index;
+          })
+        : vehicles;
+    return NextResponse.json(rows.map((v) => ({ ...v, model: v.vehicleModel })));
   } catch (error) {
     console.error("GET /api/vehicles error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

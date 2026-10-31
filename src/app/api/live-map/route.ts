@@ -18,6 +18,17 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function readDriver(value: unknown): { driverId: string; driverName: string } {
+  if (!value || typeof value !== "object") return { driverId: "", driverName: "Unknown driver" };
+  const driver = value as { _id?: unknown; userId?: { name?: string } | null };
+  const rawName = driver.userId?.name;
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  return {
+    driverId: driver._id == null ? "" : String(driver._id),
+    driverName: name || "Unknown driver",
+  };
+}
+
 /**
  * GET /api/live-map
  * Every expense that has a GPS fix, newest first. One row per expense — not
@@ -44,7 +55,7 @@ export async function GET() {
     const [rows, total] = await Promise.all([
       ExpenseM.find(query)
         .select(
-          "amount category description note timestamp location locationAccuracy walletBalanceAfter status driverId odometerKm previousOdometerKm runKm vehicleRegistration"
+          "amount category description note timestamp location locationAccuracy walletBalanceAfter status driverId hasReceipt odometerKm previousOdometerKm runKm vehicleRegistration"
         )
         .sort({ timestamp: -1, _id: -1 })
         .limit(LIMIT)
@@ -58,7 +69,7 @@ export async function GET() {
       const lat = asNumber(row.location?.lat);
       const lng = asNumber(row.location?.lng);
       if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
-      const driver = row.driverId as { userId?: { name?: string } | null } | null;
+      const driver = readDriver(row.driverId);
       const id = String(row._id);
       expenses.push({
         id,
@@ -70,7 +81,10 @@ export async function GET() {
         location: { lat, lng },
         locationAccuracy: asNumber(row.locationAccuracy),
         walletBalanceAfter: asNumber(row.walletBalanceAfter),
-        driverName: driver?.userId?.name || "Unknown driver",
+        driverName: driver.driverName,
+        driverId: driver.driverId || undefined,
+        // Unset on older rows, which may still have a photo. Explicit false means there is no receipt.
+        hasReceipt: row.hasReceipt !== false,
         receiptUrl: receiptUrlFor(id),
         odometerKm: asNumber(row.odometerKm),
         previousOdometerKm: asNumber(row.previousOdometerKm),

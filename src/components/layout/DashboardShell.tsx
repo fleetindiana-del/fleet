@@ -40,7 +40,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         id="dashboard-scroll-container"
         className={cn(
           "flex-1 relative min-w-0",
-          isMapFullscreen ? "overflow-hidden p-0" : "overflow-y-auto p-4 sm:p-6 md:p-8"
+          isMapFullscreen ? "overflow-hidden p-0" : "overflow-x-hidden overflow-y-auto p-4 sm:p-6 md:p-8"
         )}
       >
         {children}
