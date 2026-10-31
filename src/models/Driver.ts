@@ -11,7 +11,7 @@ export interface IDriver extends Document {
 const DriverSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
+    companyId: { type: Schema.Types.ObjectId, ref: 'Company' },
     walletBalance: { type: Number, default: 0 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   },

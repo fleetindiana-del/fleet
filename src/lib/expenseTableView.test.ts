@@ -251,6 +251,33 @@ test("search matches partial amount, approver, and category across words", () =>
   );
 });
 
+test("capsule balance is the settled account balance, including money added with no expenses", () => {
+  const deepak = countsFromAccount({
+    submittedCount: 0,
+    totalSubmitted: 0,
+    approvedCount: 0,
+    pendingCount: 0,
+    rejectedCount: 0,
+    balance: 200,
+  });
+  const vedant = countsFromAccount({
+    submittedCount: 1,
+    totalSubmitted: 200,
+    approvedCount: 0,
+    pendingCount: 1,
+    rejectedCount: 0,
+    balance: 1300,
+  });
+  assert.deepEqual(addCounts(deepak, vedant), {
+    expenseCount: 1,
+    expenseAmount: 200,
+    approvedCount: 0,
+    pendingCount: 1,
+    rejectedCount: 0,
+    balance: 1500,
+  });
+});
+
 test("capsule counts add roster totals and unassigned category totals", () => {
   const vedant = countsFromAccount({
     submittedCount: 2,
@@ -269,5 +296,6 @@ test("capsule counts add roster totals and unassigned category totals", () => {
     approvedCount: 1,
     pendingCount: 2,
     rejectedCount: 1,
+    balance: 0,
   });
 });

@@ -18,6 +18,37 @@ import { revokeDeviceSignIns, usernameAfterRename } from "@/lib/deviceSession";
  * monitoring on, location and expenses off) rather than to nothing, so a driver
  * created through an older client still gets a working app.
  */
+/** Blank usernames must be omitted. A unique index treats stored null as a value, so the second account with no username is rejected. */
+function blankUsername(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+let usernameIndexReady: Promise<void> | null = null;
+
+async function ensureUsernameIndex() {
+  if (!usernameIndexReady) {
+    usernameIndexReady = (async () => {
+      const coll = User.collection;
+      await coll.updateMany(
+        { $or: [{ username: null }, { username: "" }] },
+        { $unset: { username: "" } }
+      );
+      const indexes = await coll.indexes();
+      const current = indexes.find(
+        (index) => index.key && index.key.username === 1 && Object.keys(index.key).length === 1
+      );
+      if (!current?.sparse) {
+        if (current?.name) await coll.dropIndex(current.name);
+        await coll.createIndex({ username: 1 }, { unique: true, sparse: true });
+      }
+    })().catch((error) => {
+      usernameIndexReady = null;
+      throw error;
+    });
+  }
+  return usernameIndexReady;
+}
+
 function normalizeCapabilities(raw: unknown, role?: string) {
   const isDevice = role === "driver" || role === "employee";
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -46,7 +77,8 @@ export async function GET(req: Request) {
     }
 
     await connectToDatabase();
-    
+    await ensureUsernameIndex();
+
     const query: any = {};
     if (session.user.role !== "super_admin") {
       query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
@@ -117,39 +149,46 @@ export async function POST(req: Request) {
     const capabilities = normalizeCapabilities(body.capabilities, role);
 
     await connectToDatabase();
+    await ensureUsernameIndex();
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return NextResponse.json({ error: "Email already exists" }, { status: 400 });
     }
 
-    if (username) {
-      const existingUsername = await User.findOne({ username });
+    const signInName = blankUsername(username);
+    if (signInName) {
+      const existingUsername = await User.findOne({ username: signInName });
       if (existingUsername) {
         return NextResponse.json({ error: "Username is already taken" }, { status: 400 });
       }
     }
 
-    const companyId = session.user.role === "super_admin" ? body.companyId : session.user.companyId;
+    const rawCompanyId =
+      (session.user.role === "super_admin" ? body.companyId : null) || session.user.companyId;
+    const companyId =
+      rawCompanyId && mongoose.isValidObjectId(String(rawCompanyId)) ? String(rawCompanyId) : "";
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const newUser = await User.create({
-      name,
-      email,
-      username: username || undefined,
+    const account: Record<string, unknown> = {
+      name: String(name).trim(),
+      email: String(email).trim(),
       passwordHash,
       role,
-      companyId: new mongoose.Types.ObjectId(companyId),
       departmentId: departmentId ? new mongoose.Types.ObjectId(departmentId) : undefined,
       capabilities,
-    });
+    };
+    if (signInName) account.username = signInName;
+    if (companyId) account.companyId = new mongoose.Types.ObjectId(companyId);
+
+    const newUser = await User.create(account);
 
     // Automatically create Driver profile if role is driver
     if (role === "driver") {
       await Driver.create({
         userId: newUser._id,
-        companyId: new mongoose.Types.ObjectId(companyId),
+        ...(companyId ? { companyId: new mongoose.Types.ObjectId(companyId) } : {}),
         walletBalance: 0,
         status: "active"
       });
@@ -160,6 +199,15 @@ export async function POST(req: Request) {
 
     return NextResponse.json(userObj, { status: 201 });
   } catch (error) {
+    const duplicate = error as { code?: number; keyPattern?: Record<string, unknown> };
+    if (duplicate?.code === 11000) {
+      if (duplicate.keyPattern?.email) {
+        return NextResponse.json({ error: "Email already exists" }, { status: 400 });
+      }
+      if (duplicate.keyPattern?.username) {
+        return NextResponse.json({ error: "Username is already taken" }, { status: 400 });
+      }
+    }
     console.error(error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
@@ -180,6 +228,7 @@ export async function PUT(req: Request) {
     }
 
     await connectToDatabase();
+    await ensureUsernameIndex();
 
     const userToUpdate = await User.findById(_id);
     if (!userToUpdate) {
@@ -221,7 +270,8 @@ export async function PUT(req: Request) {
         if (usernameCollision) return NextResponse.json({ error: "Username is already taken" }, { status: 400 });
         userToUpdate.username = nextUsername;
       } else {
-        userToUpdate.username = undefined;
+        userToUpdate.set("username", undefined);
+        userToUpdate.markModified("username");
       }
       signInChanged = true;
     }
@@ -275,6 +325,9 @@ export async function PUT(req: Request) {
     }
 
     await userToUpdate.save();
+    if (!blankUsername(userToUpdate.username)) {
+      await User.updateOne({ _id: userToUpdate._id }, { $unset: { username: "" } });
+    }
     if (signInChanged || previousEmail !== String(userToUpdate.email || "")) {
       await revokeDeviceSignIns(userToUpdate._id);
     }

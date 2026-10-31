@@ -64,6 +64,8 @@ export interface CapsuleCounts {
   approvedCount: number;
   pendingCount: number;
   rejectedCount: number;
+  /** Settled wallet balance: money added minus amounts already taken from the account. */
+  balance: number;
 }
 
 export const EMPTY_COUNTS: CapsuleCounts = {
@@ -72,6 +74,7 @@ export const EMPTY_COUNTS: CapsuleCounts = {
   approvedCount: 0,
   pendingCount: 0,
   rejectedCount: 0,
+  balance: 0,
 };
 
 /** UTC day of a stored expense date, matching the date shown in the table. */
@@ -283,6 +286,7 @@ export function countsFromAccount(row: {
   approvedCount: number;
   pendingCount: number;
   rejectedCount: number;
+  balance?: number;
 }): CapsuleCounts {
   return {
     expenseCount: row.submittedCount,
@@ -290,6 +294,7 @@ export function countsFromAccount(row: {
     approvedCount: row.approvedCount,
     pendingCount: row.pendingCount,
     rejectedCount: row.rejectedCount,
+    balance: row.balance ?? 0,
   };
 }
 
@@ -310,6 +315,7 @@ export function countsFromSpend(
       approvedCount: acc.approvedCount + row.approvedCount,
       pendingCount: acc.pendingCount + row.pendingCount,
       rejectedCount: acc.rejectedCount + row.rejectedCount,
+      balance: acc.balance,
     }),
     { ...EMPTY_COUNTS }
   );
@@ -324,5 +330,6 @@ export function addCounts(a: CapsuleCounts, b: CapsuleCounts): CapsuleCounts {
     approvedCount: a.approvedCount + b.approvedCount,
     pendingCount: a.pendingCount + b.pendingCount,
     rejectedCount: a.rejectedCount + b.rejectedCount,
+    balance: Math.round((a.balance + b.balance) * 100) / 100,
   };
 }

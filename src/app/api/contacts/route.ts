@@ -67,7 +67,15 @@ export async function POST(req: Request) {
     });
 
     if (bulkOps.length > 0) {
-      await Contact.bulkWrite(bulkOps);
+      try {
+        await Contact.bulkWrite(bulkOps, { ordered: false });
+      } catch (error: any) {
+        const writeErrors = error?.writeErrors || [];
+        const duplicateOnly =
+          error?.code === 11000 ||
+          (writeErrors.length > 0 && writeErrors.every((e: { code?: number }) => e.code === 11000));
+        if (!duplicateOnly) throw error;
+      }
     }
 
     console.log(`🔌 Synced ${contacts.length} contacts`);

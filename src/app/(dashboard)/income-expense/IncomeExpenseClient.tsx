@@ -325,6 +325,7 @@ function EmployeeCapsule({
         <div className="mt-0.5 text-[11px] text-slate-400 tabular-nums">
           {counts.expenseCount} {counts.expenseCount === 1 ? "expense" : "expenses"} · {formatINR(counts.expenseAmount)}
         </div>
+        <div className="text-[11px] tabular-nums text-emerald-300/90">Balance {formatINR(counts.balance)}</div>
       </button>
       <div className="mt-1 flex flex-wrap gap-x-1 gap-y-0.5 text-[11px]">
         <StatusCountButton

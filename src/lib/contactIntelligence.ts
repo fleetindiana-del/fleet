@@ -27,6 +27,7 @@ import {
   nameRequestKeyboard,
 } from '@/lib/telegram';
 import { escapeHtml, escapeRegex, shouldSendSaveReminder } from '@/lib/telegramFormat';
+import { phoneKeyOf } from '@/lib/contactNormalize';
 
 const CALL_THRESHOLD = 5;
 /** Cooldown for "save contact in phone" reminders after the contact is fully classified. */
@@ -126,7 +127,15 @@ export async function runContactIntelligence(
       phoneNumber
     );
 
-    const identified = await IdentifiedContact.findOne({ phoneNumber, employeeName });
+    const employeeKey = employeeName.toLowerCase();
+    const numberKey = phoneKeyOf(phoneNumber);
+    // The same handset number is stored as 09876… and +919876…. Matching only the
+    // raw string misses the existing row, then create() hits the unique
+    // phoneKey+employeeKey index and the whole call is logged as a sync failure.
+    let identified = await IdentifiedContact.findOne({ phoneNumber, employeeName });
+    if (!identified && numberKey) {
+      identified = await IdentifiedContact.findOne({ phoneKey: numberKey, employeeKey });
+    }
 
     if (identified?.contactName && identified?.category) {
       await UnknownNumberTracker.updateOne(
@@ -165,14 +174,20 @@ export async function runContactIntelligence(
       );
 
       if (!identified) {
-        await IdentifiedContact.create({
-          phoneNumber,
-          employeeName,
-          deviceId,
-          contactName: name,
-          telegramChatId: chatId ?? undefined,
-        });
-        await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
+        try {
+          identified = await IdentifiedContact.create({
+            phoneNumber,
+            employeeName,
+            deviceId,
+            contactName: name,
+            telegramChatId: chatId ?? undefined,
+          });
+          await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
+        } catch (createErr: any) {
+          if (createErr?.code !== 11000) throw createErr;
+          identified = await IdentifiedContact.findOne({ phoneKey: numberKey, employeeKey });
+          if (!identified) throw createErr;
+        }
       } else {
         const setFields: Record<string, unknown> = {};
         if (!identified.contactName) setFields.contactName = name;
